@@ -690,6 +690,8 @@ components:
           $ref: '#/components/schemas/User'
         access_token:
           type: string
+        refresh_token:
+          type: string
         token_type:
           type: string
           example: Bearer

@@ -95,10 +95,11 @@ func newTestJWTService() *jwtsvc.Service {
 
 func TestRegisterSuccess(t *testing.T) {
 	userRepo := newFakeUserRepo()
+	refreshTokenRepo := newFakeRefreshTokenRepo()
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	uc := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	uc := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 
 	output, err := uc.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
@@ -115,14 +116,21 @@ func TestRegisterSuccess(t *testing.T) {
 	if output.AccessToken == "" {
 		t.Fatal("expected non-empty access token")
 	}
+	if output.RefreshToken == "" {
+		t.Fatal("expected non-empty refresh token")
+	}
+	if len(refreshTokenRepo.tokens) != 1 {
+		t.Fatalf("expected one stored refresh token, got %d", len(refreshTokenRepo.tokens))
+	}
 }
 
 func TestRegisterDuplicateEmail(t *testing.T) {
 	userRepo := newFakeUserRepo()
+	refreshTokenRepo := newFakeRefreshTokenRepo()
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	uc := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	uc := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 
 	if _, err := uc.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
@@ -148,7 +156,7 @@ func TestLoginSuccess(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	if _, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -183,7 +191,7 @@ func TestLoginWrongPassword(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	if _, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -224,7 +232,7 @@ func TestRefreshTokenSuccess(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	if _, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -265,7 +273,7 @@ func TestRefreshTokenReuse(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	if _, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -301,7 +309,7 @@ func TestLogout(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	if _, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -339,7 +347,7 @@ func TestLogoutRevokesOnlySubmittedRefreshToken(t *testing.T) {
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	_, _ = registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",
@@ -372,10 +380,11 @@ func TestLogoutRevokesOnlySubmittedRefreshToken(t *testing.T) {
 
 func TestProfileSuccess(t *testing.T) {
 	userRepo := newFakeUserRepo()
+	refreshTokenRepo := newFakeRefreshTokenRepo()
 	pwdSvc := pwdsvc.NewService()
 	jwtSvc := newTestJWTService()
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdSvc, jwtSvc)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
 	output, _ := registerUC.Execute(context.Background(), usecase.RegisterInput{
 		FullName: "John Doe",
 		Email:    "john@example.com",

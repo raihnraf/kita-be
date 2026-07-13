@@ -71,9 +71,10 @@ func (h *IdentityHandler) Register(c *fiber.Ctx) error {
 			Status:    string(output.User.Status),
 			CreatedAt: output.User.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		},
-		AccessToken: output.AccessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(h.register.Expiry().Seconds()),
+		AccessToken:  output.AccessToken,
+		RefreshToken: output.RefreshToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(h.register.Expiry().Seconds()),
 	})
 }
 

@@ -46,7 +46,7 @@ func main() {
 	userRepo := idrepo.NewUserRepository(db)
 	refreshTokenRepo := idrepo.NewRefreshTokenRepository(db)
 
-	registerUC := usecase.NewRegisterUsecase(userRepo, pwdService, jwtService)
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdService, jwtService)
 	loginUC := usecase.NewLoginUsecase(userRepo, refreshTokenRepo, pwdService, jwtService)
 	refreshUC := usecase.NewRefreshUsecase(userRepo, refreshTokenRepo, jwtService)
 	logoutUC := usecase.NewLogoutUsecase(userRepo, refreshTokenRepo)

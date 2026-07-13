@@ -53,14 +53,15 @@ func TestIdentityHandlerRegisterSuccess(t *testing.T) {
 			User struct {
 				Email string `json:"email"`
 			} `json:"user"`
-			AccessToken string `json:"access_token"`
-			TokenType   string `json:"token_type"`
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+			TokenType    string `json:"token_type"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !body.Success || body.Data.User.Email != "john@example.com" || body.Data.AccessToken == "" || body.Data.TokenType != "Bearer" {
+	if !body.Success || body.Data.User.Email != "john@example.com" || body.Data.AccessToken == "" || body.Data.RefreshToken == "" || body.Data.TokenType != "Bearer" {
 		t.Fatalf("unexpected response body: %+v", body)
 	}
 }
@@ -123,7 +124,7 @@ func newIdentityTestApp(userID string) (*fiber.App, *identityTestDeps) {
 	}
 	jwtSvc := jwtsvc.NewService("test-secret", 15*time.Minute, 7*24*time.Hour)
 	handler := identityhttp.NewIdentityHandler(
-		usecase.NewRegisterUsecase(deps.userRepo, deps.pwdSvc, jwtSvc),
+		usecase.NewRegisterUsecase(deps.userRepo, deps.refreshTokenRepo, deps.pwdSvc, jwtSvc),
 		usecase.NewLoginUsecase(deps.userRepo, deps.refreshTokenRepo, deps.pwdSvc, jwtSvc),
 		usecase.NewRefreshUsecase(deps.userRepo, deps.refreshTokenRepo, jwtSvc),
 		usecase.NewLogoutUsecase(deps.userRepo, deps.refreshTokenRepo),

@@ -15,13 +15,14 @@ import (
 )
 
 type RegisterUsecase struct {
-	userRepo UserRepository
-	pwdSvc   *pwdsvc.Service
-	jwtSvc   *jwtsvc.Service
+	userRepo         UserRepository
+	refreshTokenRepo RefreshTokenRepository
+	pwdSvc           *pwdsvc.Service
+	jwtSvc           *jwtsvc.Service
 }
 
-func NewRegisterUsecase(userRepo UserRepository, pwdSvc *pwdsvc.Service, jwtSvc *jwtsvc.Service) *RegisterUsecase {
-	return &RegisterUsecase{userRepo: userRepo, pwdSvc: pwdSvc, jwtSvc: jwtSvc}
+func NewRegisterUsecase(userRepo UserRepository, refreshTokenRepo RefreshTokenRepository, pwdSvc *pwdsvc.Service, jwtSvc *jwtsvc.Service) *RegisterUsecase {
+	return &RegisterUsecase{userRepo: userRepo, refreshTokenRepo: refreshTokenRepo, pwdSvc: pwdSvc, jwtSvc: jwtSvc}
 }
 
 func (uc *RegisterUsecase) Expiry() time.Duration {
@@ -62,10 +63,20 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, input RegisterInput) (*R
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
 
+	refreshTokenStr, expiresAt, err := uc.jwtSvc.GenerateRefreshToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	refreshToken := domain.NewRefreshToken(uuid.New().String(), user.ID, hashToken(refreshTokenStr), expiresAt)
+	if err := uc.refreshTokenRepo.Create(ctx, refreshToken); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
 	return &RegisterOutput{
 		User:         user,
 		AccessToken:  accessToken,
-		RefreshToken: "",
+		RefreshToken: refreshTokenStr,
 	}, nil
 }
 
