@@ -80,9 +80,14 @@ func TestDecreaseStockInsufficient(t *testing.T) {
 }
 
 func TestIncreaseStock(t *testing.T) {
-	book := domain.NewBook("id-1", "978-test", "Test Book", "Author", 0)
+	book := domain.NewBook("id-1", "978-test", "Test Book", "Author", 3)
+	if err := book.DecreaseStock(3); err != nil {
+		t.Fatalf("failed to arrange stock decrease: %v", err)
+	}
 
-	book.IncreaseStock(3)
+	if err := book.IncreaseStock(3); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
 	if book.AvailableStock != 3 {
 		t.Errorf("expected available_stock 3, got %d", book.AvailableStock)
 	}
@@ -91,5 +96,17 @@ func TestIncreaseStock(t *testing.T) {
 	}
 	if !book.CanBorrow() {
 		t.Error("expected CanBorrow true")
+	}
+}
+
+func TestIncreaseStockExceedsTotal(t *testing.T) {
+	book := domain.NewBook("id-1", "978-test", "Test Book", "Author", 1)
+
+	err := book.IncreaseStock(1)
+	if err == nil {
+		t.Fatal("expected error when stock increase exceeds total")
+	}
+	if book.AvailableStock != 1 {
+		t.Errorf("expected available_stock unchanged (1), got %d", book.AvailableStock)
 	}
 }

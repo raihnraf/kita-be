@@ -74,7 +74,7 @@ func (r *BookRepository) ApplyStockEvent(ctx context.Context, event *domain.Book
 			return nil, fmt.Errorf("failed to increase stock: %w", err)
 		}
 		if result.RowsAffected() == 0 {
-			return nil, fmt.Errorf("stock increase would exceed total stock")
+			return nil, domain.ErrStockExceedsTotal
 		}
 		if _, err := tx.Exec(ctx, `UPDATE books SET status = 'AVAILABLE', updated_at = NOW() WHERE id = $1 AND available_stock > 0 AND status = 'OUT_OF_STOCK'`, event.BookID); err != nil {
 			return nil, fmt.Errorf("failed to update book status: %w", err)
@@ -259,11 +259,14 @@ func (r *BookRepository) DecreaseStock(ctx context.Context, id string, qty int) 
 func (r *BookRepository) IncreaseStock(ctx context.Context, id string, qty int) error {
 	query := `
 		UPDATE books SET available_stock = available_stock + $2, updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND available_stock + $2 <= total_stock
 	`
-	_, err := r.pool.Exec(ctx, query, id, qty)
+	result, err := r.pool.Exec(ctx, query, id, qty)
 	if err != nil {
 		return fmt.Errorf("failed to increase stock: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrStockExceedsTotal
 	}
 
 	_, err = r.pool.Exec(ctx,

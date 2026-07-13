@@ -217,8 +217,7 @@ func (r *handlerFakeBookRepo) IncreaseStock(ctx context.Context, id string, qty 
 	if err != nil {
 		return err
 	}
-	book.IncreaseStock(qty)
-	return nil
+	return book.IncreaseStock(qty)
 }
 
 func (r *handlerFakeBookRepo) ApplyStockEvent(ctx context.Context, event *domain.BookStockEvent) (*domain.BookStockEvent, error) {

@@ -62,8 +62,7 @@ func (r *fakeBookRepo) IncreaseStock(ctx context.Context, id string, qty int) er
 	if err != nil {
 		return err
 	}
-	book.IncreaseStock(qty)
-	return nil
+	return book.IncreaseStock(qty)
 }
 
 func (r *fakeBookRepo) ApplyStockEvent(ctx context.Context, event *domain.BookStockEvent) (*domain.BookStockEvent, error) {

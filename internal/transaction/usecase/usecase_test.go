@@ -398,6 +398,9 @@ func TestReturnSuccess(t *testing.T) {
 		UserID: "user-1",
 		BookID: "book-1",
 	})
+	if bookClient.stock["book-1"] != 2 {
+		t.Fatalf("expected stock to decrease to 2 after borrow, got %d", bookClient.stock["book-1"])
+	}
 
 	time.Sleep(1 * time.Millisecond)
 
@@ -414,6 +417,16 @@ func TestReturnSuccess(t *testing.T) {
 
 	if output.Transaction.Status != domain.TransactionReturned {
 		t.Errorf("expected status RETURNED, got %s", output.Transaction.Status)
+	}
+	if bookClient.stock["book-1"] != 3 {
+		t.Errorf("expected stock to be restored to 3 after return, got %d", bookClient.stock["book-1"])
+	}
+	active, err := txnRepo.CountActiveByUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("failed to count active loans: %v", err)
+	}
+	if active != 0 {
+		t.Errorf("expected 0 active loans after return, got %d", active)
 	}
 }
 

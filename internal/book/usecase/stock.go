@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -122,6 +123,9 @@ func (uc *StockUsecase) IncreaseStockEvent(ctx context.Context, bookID string, q
 
 	appliedEvent, err := uc.bookRepo.ApplyStockEvent(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStockExceedsTotal) {
+			return nil, apperror.Conflict(domain.ErrStockExceedsTotal.Error())
+		}
 		return nil, fmt.Errorf("failed to increase stock: %w", err)
 	}
 

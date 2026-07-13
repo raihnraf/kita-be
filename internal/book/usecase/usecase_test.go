@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 
 	domain "kita-be/internal/book/domain"
 	"kita-be/internal/book/usecase"
+	"kita-be/internal/platform/apperror"
 )
 
 type fakeBookRepo struct {
@@ -113,8 +115,7 @@ func (r *fakeBookRepo) IncreaseStock(ctx context.Context, id string, qty int) er
 	if !ok {
 		return fmt.Errorf("book not found")
 	}
-	b.IncreaseStock(qty)
-	return nil
+	return b.IncreaseStock(qty)
 }
 
 func (r *fakeBookRepo) ApplyStockEvent(ctx context.Context, event *domain.BookStockEvent) (*domain.BookStockEvent, error) {
@@ -346,6 +347,26 @@ func TestStockIncreaseSuccess(t *testing.T) {
 	updated, _ := repo.FindByID(context.Background(), book.ID)
 	if updated.AvailableStock != 1 {
 		t.Errorf("expected available_stock 1, got %d", updated.AvailableStock)
+	}
+}
+
+func TestStockIncreaseExceedsTotal(t *testing.T) {
+	repo := newFakeBookRepo()
+	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
+
+	uc := usecase.NewStockUsecase(repo)
+	_, err := uc.IncreaseStock(context.Background(), book.ID, 1, "txn-1")
+	if err == nil {
+		t.Fatal("expected error when stock increase exceeds total")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Kind != apperror.KindConflict {
+		t.Fatalf("expected conflict app error, got %v", err)
+	}
+
+	updated, _ := repo.FindByID(context.Background(), book.ID)
+	if updated.AvailableStock != 1 {
+		t.Errorf("expected available_stock unchanged at 1, got %d", updated.AvailableStock)
 	}
 }
 

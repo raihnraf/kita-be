@@ -62,12 +62,16 @@ func (b *Book) DecreaseStock(qty int) error {
 	return nil
 }
 
-func (b *Book) IncreaseStock(qty int) {
+func (b *Book) IncreaseStock(qty int) error {
+	if b.AvailableStock+qty > b.TotalStock {
+		return ErrStockExceedsTotal
+	}
 	b.AvailableStock += qty
 	if b.AvailableStock > 0 && b.Status == BookStatusOutOfStock {
 		b.Status = BookStatusAvailable
 	}
 	b.UpdatedAt = time.Now()
+	return nil
 }
 
 type ErrInsufficientStockType struct{}
@@ -77,3 +81,11 @@ func (e ErrInsufficientStockType) Error() string {
 }
 
 var ErrInsufficientStock = ErrInsufficientStockType{}
+
+type ErrStockExceedsTotalType struct{}
+
+func (e ErrStockExceedsTotalType) Error() string {
+	return "stock increase would exceed total stock"
+}
+
+var ErrStockExceedsTotal = ErrStockExceedsTotalType{}
