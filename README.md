@@ -197,6 +197,8 @@ SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001
 DB_NAME=kita_book RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-worker
 ```
 
+Catatan: `RABBITMQ_URL` sengaja dikosongkan pada `book-api` dan `transaction-api` untuk mode sync/demo agar tidak terjadi mutasi stok ganda; RabbitMQ hanya diperlukan oleh `book-worker` saat jalur async diaktifkan.
+
 Perintah Makefile yang tersedia:
 
 | Perintah | Fungsi |

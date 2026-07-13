@@ -169,6 +169,10 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/books/{id}:
     get:
       tags: [Books]
@@ -187,6 +191,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Book'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
     put:
@@ -218,8 +224,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/books/{id}/availability:
     get:
       tags: [Books]
@@ -238,6 +248,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Availability'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/internal/books/{id}/stock/decrease:
@@ -252,9 +264,22 @@ paths:
         $ref: '#/components/requestBodies/StockChange'
       responses:
         '200':
-          $ref: '#/components/responses/OK'
+          description: Stock decreased
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/APIResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockChangeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
   /api/v1/internal/books/{id}/stock/increase:
@@ -269,9 +294,24 @@ paths:
         $ref: '#/components/requestBodies/StockChange'
       responses:
         '200':
-          $ref: '#/components/responses/OK'
+          description: Stock increased
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/APIResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockChangeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/transactions/borrow:
     post:
       tags: [Transactions]
@@ -324,6 +364,8 @@ paths:
                         $ref: '#/components/schemas/Transaction'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -401,6 +443,10 @@ paths:
                         $ref: '#/components/schemas/Transaction'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/internal/transactions:
@@ -414,7 +460,24 @@ paths:
         - $ref: '#/components/parameters/PerPage'
       responses:
         '200':
-          $ref: '#/components/responses/OK'
+          description: Paginated transaction list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/APIResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Transaction'
+                      meta:
+                        $ref: '#/components/schemas/Meta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/internal/transactions/{id}:
     get:
       tags: [Internal]
@@ -425,7 +488,22 @@ paths:
         - $ref: '#/components/parameters/ID'
       responses:
         '200':
-          $ref: '#/components/responses/OK'
+          description: Internal transaction detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/APIResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/internal/transactions/{id}/audits:
@@ -450,6 +528,12 @@ paths:
                         type: array
                         items:
                           $ref: '#/components/schemas/TransactionAudit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/health:
@@ -754,6 +838,15 @@ components:
         transaction_id:
           type: string
           format: uuid
+    StockChangeResponse:
+      type: object
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PROCESSED, FAILED]
     BorrowRequest:
       type: object
       required: [book_id, idempotency_key]
