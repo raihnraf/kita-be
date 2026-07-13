@@ -1,0 +1,172 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kita-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kita
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+      - ./migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kita"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kita-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: kita-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kita-network
+
+  identity-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kita-identity-api
+    command: ./identity-api
+    environment:
+      SERVER_PORT: "3000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: kita_identity
+      DB_SSLMODE: disable
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_EXPIRY: 15m
+      REFRESH_TOKEN_EXPIRY: 168h
+      INTERNAL_API_TOKEN: dev-internal-token
+      LOAN_DAYS: "7"
+      DAILY_FINE_AMOUNT: "500.0"
+      MAX_ACTIVE_BORROWS: "3"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - kita-network
+    restart: unless-stopped
+
+  book-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kita-book-api
+    command: ./book-api
+    environment:
+      SERVER_PORT: "3000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: kita_book
+      DB_SSLMODE: disable
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_EXPIRY: 15m
+      REFRESH_TOKEN_EXPIRY: 168h
+      INTERNAL_API_TOKEN: dev-internal-token
+      LOAN_DAYS: "7"
+      DAILY_FINE_AMOUNT: "500.0"
+      MAX_ACTIVE_BORROWS: "3"
+      RABBITMQ_URL: ""
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - kita-network
+    restart: unless-stopped
+
+  transaction-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kita-transaction-api
+    command: ./transaction-api
+    environment:
+      SERVER_PORT: "3000"
+      BOOK_SERVICE_URL: "http://book-api:3000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: kita_transaction
+      DB_SSLMODE: disable
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_EXPIRY: 15m
+      REFRESH_TOKEN_EXPIRY: 168h
+      INTERNAL_API_TOKEN: dev-internal-token
+      LOAN_DAYS: "7"
+      DAILY_FINE_AMOUNT: "500.0"
+      MAX_ACTIVE_BORROWS: "3"
+      RABBITMQ_URL: ""
+    ports:
+      - "3002:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - kita-network
+    restart: unless-stopped
+
+  book-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kita-book-worker
+    command: ./book-worker
+    environment:
+      SERVER_PORT: "3000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: kita_book
+      DB_SSLMODE: disable
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_EXPIRY: 15m
+      REFRESH_TOKEN_EXPIRY: 168h
+      INTERNAL_API_TOKEN: dev-internal-token
+      LOAN_DAYS: "7"
+      DAILY_FINE_AMOUNT: "500.0"
+      MAX_ACTIVE_BORROWS: "3"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - kita-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  kita-network:
+    driver: bridge

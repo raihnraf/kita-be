@@ -1,0 +1,4 @@
+ALTER TABLE borrow_transactions
+    ADD COLUMN IF NOT EXISTS book_isbn VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS book_title VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS book_author VARCHAR(255);

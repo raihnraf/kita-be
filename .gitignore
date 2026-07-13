@@ -1,0 +1,8 @@
+.env
+bin/
+coverage.out
+
+# Local planning/audit notes, not part of the backend submission.
+/audit.md
+/plan.md
+/soal.md

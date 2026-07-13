@@ -1,0 +1,44 @@
+package logger
+
+import (
+	"log/slog"
+	"os"
+)
+
+var defaultLogger *slog.Logger
+
+func init() {
+	defaultLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+}
+
+func L() *slog.Logger {
+	return defaultLogger
+}
+
+func SetLevel(level slog.Level) {
+	defaultLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	}))
+}
+
+func SetDefault(l *slog.Logger) {
+	defaultLogger = l
+}
+
+func Info(msg string, args ...any) {
+	defaultLogger.Info(msg, args...)
+}
+
+func Error(msg string, args ...any) {
+	defaultLogger.Error(msg, args...)
+}
+
+func Warn(msg string, args ...any) {
+	defaultLogger.Warn(msg, args...)
+}
+
+func Debug(msg string, args ...any) {
+	defaultLogger.Debug(msg, args...)
+}
