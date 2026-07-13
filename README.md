@@ -14,20 +14,20 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 
 | Kebutuhan | Status | Implementasi |
 |---|---|---|
-| Backend Golang + Fiber | Ada | Service HTTP dibuat dengan Go dan Fiber v2 |
-| Database PostgreSQL atau MySQL | Ada | Menggunakan PostgreSQL 16 |
-| Auth OAuth2 menggunakan JWT | Ada | Endpoint token mendukung grant `password` dan `refresh_token`, access token berbasis JWT |
-| SOLID Principle | Ada | Pemisahan domain, usecase, repository, delivery, dan dependency via interface |
-| Clean Architecture | Ada | Business rule berada di layer usecase/domain, tidak bercampur dengan HTTP atau SQL |
+| Backend Golang + Fiber | ✅ | Service HTTP dibuat dengan Go dan Fiber v2 |
+| Database PostgreSQL atau MySQL | ✅ | Menggunakan PostgreSQL 16 |
+| Auth OAuth2 menggunakan JWT | ✅ | Endpoint token mendukung grant `password` dan `refresh_token`, access token berbasis JWT |
+| SOLID Principle | ✅ | Pemisahan domain, usecase, repository, delivery, dan dependency via interface |
+| Clean Architecture | ✅ | Business rule berada di layer usecase/domain, tidak bercampur dengan HTTP atau SQL |
 
 ### Service Backend
 
 | Service | Tanggung Jawab | Status |
 |---|---|---|
-| Identity Service | Registrasi, login, token OAuth2/JWT, refresh token, logout, profil user | Ada |
-| Book Service | Katalog buku, detail buku, pencarian, manajemen stok, cek ketersediaan | Ada |
-| Transaction Service | Peminjaman, pengembalian, riwayat transaksi, transaksi aktif, perhitungan denda | Ada |
-| Book Worker | Consumer RabbitMQ untuk sinkronisasi stok secara async | Bonus |
+| Identity Service | Registrasi, login, token OAuth2/JWT, refresh token, logout, profil user | ✅ |
+| Book Service | Katalog buku, detail buku, pencarian, manajemen stok, cek ketersediaan | ✅ |
+| Transaction Service | Peminjaman, pengembalian, riwayat transaksi, transaksi aktif, perhitungan denda | ✅ |
+| Book Worker | Consumer RabbitMQ untuk sinkronisasi stok secara async | ✅ Bonus |
 
 ### Aturan Bisnis Backend
 
@@ -43,9 +43,28 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 
 | Nilai plus dari soal | Status |
 |---|---|
-| RabbitMQ | Ada, untuk event stok buku |
-| Docker Compose | Ada, menjalankan PostgreSQL, RabbitMQ, dan semua service backend |
-| Unit Testing | Ada, dapat dijalankan dengan `make test` atau `go test ./...` |
+| RabbitMQ | ✅ Untuk event stok buku |
+| Docker Compose | ✅ Menjalankan PostgreSQL, RabbitMQ, dan semua service backend |
+| Unit Testing | ✅ Dapat dijalankan dengan `make test` atau `go test ./...` |
+
+---
+
+## Engineering Highlights
+
+Selain fitur wajib dan nilai plus dari soal, backend ini juga menambahkan beberapa detail engineering agar sistem lebih aman saat retry, concurrency, dan integrasi antar service.
+
+- **Idempotency dengan response replay**: request peminjaman yang dikirim ulang dengan `idempotency_key` yang sama dapat mengembalikan response awal, sehingga retry dari client lebih aman dan tidak membuat transaksi ganda.
+- **Advisory lock untuk race condition borrow**: pengecekan limit pinjam aktif dan pembuatan transaksi dibungkus dengan PostgreSQL advisory lock per user agar request paralel tidak bisa melewati batas maksimal 3 buku.
+- **Stock event idempotency**: constraint unik `(transaction_id, event_type)` pada `book_stock_events` memastikan stok tidak berubah dua kali untuk event transaksi yang sama, meskipun RabbitMQ mengirim duplicate message.
+- **RabbitMQ publisher confirms**: publisher menunggu `ack` dari broker sebelum dianggap berhasil, sehingga kegagalan publish bisa terdeteksi dan dilog.
+- **RabbitMQ consumer reconnect loop**: consumer otomatis reconnect dengan exponential backoff saat broker bermasalah, tanpa harus restart worker secara manual.
+- **Dead Letter Queue**: message yang tetap gagal setelah retry tidak hilang diam-diam, tetapi masuk ke DLQ agar bisa diperiksa.
+- **Integer cents untuk uang**: denda disimpan dan dihitung sebagai integer cents (`fine_amount_cents`), bukan floating-point, agar perhitungan uang tidak terkena error pembulatan.
+- **Double-return protection**: proses return memakai conditional update; transaksi yang sudah dikembalikan tidak bisa dikembalikan ulang dan stok tidak bertambah dua kali.
+- **Book snapshot saat borrow**: judul, penulis, dan ISBN disimpan ke transaksi saat peminjaman, sehingga history tetap stabil meskipun data buku berubah dan tidak perlu query Book Service per baris history.
+- **Token type enforcement**: JWT membawa field `token_type`, sehingga access token dan refresh token tidak bisa saling tertukar penggunaannya.
+- **Rate limiting**: endpoint auth dan write transaction dibatasi dengan Fiber rate limiter untuk mengurangi brute force dan request spam.
+- **golangci-lint clean**: konfigurasi lint mencakup `errcheck`, `govet`, `ineffassign`, `staticcheck`, dan `unused` untuk menjaga kualitas kode.
 
 ---
 
