@@ -212,7 +212,9 @@ func doJSON[T any](client *http.Client, req *http.Request) (*T, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	var out T
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
