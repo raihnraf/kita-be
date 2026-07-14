@@ -20,7 +20,6 @@ type BorrowUsecase struct {
 	auditRepo       AuditRepository
 	idempotencyRepo IdempotencyRepository
 	bookClient      BookServiceClient
-	eventPublisher  StockEventPublisher
 	maxActive       int
 	loanDays        int
 }
@@ -41,10 +40,6 @@ func NewBorrowUsecase(
 		maxActive:       maxActive,
 		loanDays:        loanDays,
 	}
-}
-
-func (uc *BorrowUsecase) SetEventPublisher(publisher StockEventPublisher) {
-	uc.eventPublisher = publisher
 }
 
 type BorrowInput struct {
@@ -114,7 +109,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 
 	txn.StockEventID = &stockEventID
 
-	if err := uc.txnRepo.CreateIfUserBelowActiveLimit(ctx, txn, uc.maxActive); err != nil {
+	outbox := domain.NewStockEventOutbox(uuid.New().String(), "DECREASE", txn)
+	if err := uc.txnRepo.CreateBorrowWithOutbox(ctx, txn, uc.maxActive, outbox); err != nil {
 		_, _ = uc.bookClient.IncreaseStock(context.Background(), input.BookID, 1, txn.ID)
 		if errors.Is(err, domain.ErrActiveBorrowLimitReached) {
 			return nil, apperror.Conflictf("maximum %d active borrows reached", uc.maxActive)
@@ -135,18 +131,6 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 			"to_status", audit.ToStatus,
 			"error", err.Error(),
 		)
-	}
-
-	if uc.eventPublisher != nil {
-		go func() {
-			if err := uc.eventPublisher.PublishStockDecrease(context.Background(), txn.ID, txn.TransactionRef, txn.UserID, txn.BookID); err != nil {
-				logger.Warn("async stock decrease publish failed",
-					"transaction_id", txn.ID,
-					"book_id", txn.BookID,
-					"error", err.Error(),
-				)
-			}
-		}()
 	}
 
 	if input.IdempotencyKey != "" {

@@ -20,7 +20,6 @@ type ReturnUsecase struct {
 	auditRepo       AuditRepository
 	idempotencyRepo IdempotencyRepository
 	bookClient      BookServiceClient
-	eventPublisher  StockEventPublisher
 	fineCalculator  *FineCalculator
 }
 
@@ -38,10 +37,6 @@ func NewReturnUsecase(
 		bookClient:      bookClient,
 		fineCalculator:  fineCalculator,
 	}
-}
-
-func (uc *ReturnUsecase) SetEventPublisher(publisher StockEventPublisher) {
-	uc.eventPublisher = publisher
 }
 
 type ReturnInput struct {
@@ -111,7 +106,8 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 	txn.StockEventID = &stockEventID
 	txn.UpdatedAt = now
 
-	if err := uc.txnRepo.ReturnIfActive(ctx, txn); err != nil {
+	outbox := domain.NewStockEventOutbox(uuid.New().String(), "INCREASE", txn)
+	if err := uc.txnRepo.ReturnIfActiveWithOutbox(ctx, txn, outbox); err != nil {
 		if errors.Is(err, domain.ErrTransactionNotActive) {
 			return nil, apperror.Conflict("transaction is not active")
 		}
@@ -133,18 +129,6 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 			"to_status", audit.ToStatus,
 			"error", err.Error(),
 		)
-	}
-
-	if uc.eventPublisher != nil {
-		go func() {
-			if err := uc.eventPublisher.PublishStockIncrease(context.Background(), txn.ID, txn.TransactionRef, txn.UserID, txn.BookID); err != nil {
-				logger.Warn("async stock increase publish failed",
-					"transaction_id", txn.ID,
-					"book_id", txn.BookID,
-					"error", err.Error(),
-				)
-			}
-		}()
 	}
 
 	if input.IdempotencyKey != "" {

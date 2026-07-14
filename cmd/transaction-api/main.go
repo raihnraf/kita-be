@@ -41,6 +41,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	defer serviceCancel()
 
 	jwtService := jwtsvc.NewService(cfg.JWTSecret, cfg.JWTExpiry, cfg.RefreshTokenExpiry)
 
@@ -54,6 +56,7 @@ func main() {
 	txnRepo := txnrepo.NewTransactionRepository(db)
 	auditRepo := txnrepo.NewAuditRepository(db)
 	idempotencyRepo := txnrepo.NewIdempotencyRepository(db)
+	outboxRepo := txnrepo.NewStockEventOutboxRepository(db)
 
 	fineCalc := usecase.NewFineCalculator(cfg.DailyFineAmountCents)
 
@@ -62,8 +65,8 @@ func main() {
 	historyUC := usecase.NewHistoryUsecase(txnRepo, auditRepo)
 
 	if cfg.RabbitMQURL == "" {
-		logger.Info("rabbitmq stock event publisher disabled")
-	} else if rmqConn, err := rabbitmq.NewConnection(cfg.RabbitMQURL); err != nil {
+		logger.Info("rabbitmq stock event outbox dispatcher disabled")
+	} else if rmqConn, err := connectRabbitMQWithRetry(cfg.RabbitMQURL, 30, 2*time.Second); err != nil {
 		logger.Warn("rabbitmq not available, running without async stock events", "error", err.Error())
 	} else {
 		defer rmqConn.Close()
@@ -73,9 +76,9 @@ func main() {
 			logger.Warn("failed to setup rabbitmq publisher", "error", err.Error())
 		} else {
 			msgPublisher := txnmsg.NewPublisher(rmqPublisher)
-			borrowUC.SetEventPublisher(msgPublisher)
-			returnUC.SetEventPublisher(msgPublisher)
-			logger.Info("rabbitmq stock event publisher enabled")
+			dispatcher := txnmsg.NewOutboxDispatcher(outboxRepo, msgPublisher, 2*time.Second, 10)
+			go dispatcher.Run(serviceCtx)
+			logger.Info("rabbitmq stock event outbox dispatcher enabled")
 		}
 	}
 
@@ -138,6 +141,7 @@ func main() {
 	<-quit
 
 	logger.Info("shutting down transaction service")
+	serviceCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -147,4 +151,18 @@ func main() {
 	}
 
 	logger.Info("transaction service stopped")
+}
+
+func connectRabbitMQWithRetry(url string, attempts int, delay time.Duration) (*rabbitmq.Connection, error) {
+	var lastErr error
+	for i := 1; i <= attempts; i++ {
+		conn, err := rabbitmq.NewConnection(url)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		logger.Warn("rabbitmq connection attempt failed", "attempt", i, "max_attempts", attempts, "error", err.Error())
+		time.Sleep(delay)
+	}
+	return nil, lastErr
 }

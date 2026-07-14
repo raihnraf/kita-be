@@ -261,11 +261,12 @@ func newTransactionTestApp(userID string) (*fiber.App, *transactionTestDeps) {
 }
 
 type handlerFakeTxnRepo struct {
-	txns map[string]*domain.BorrowTransaction
+	txns   map[string]*domain.BorrowTransaction
+	outbox map[string]*domain.StockEventOutbox
 }
 
 func newHandlerFakeTxnRepo() *handlerFakeTxnRepo {
-	return &handlerFakeTxnRepo{txns: make(map[string]*domain.BorrowTransaction)}
+	return &handlerFakeTxnRepo{txns: make(map[string]*domain.BorrowTransaction), outbox: make(map[string]*domain.StockEventOutbox)}
 }
 
 func (r *handlerFakeTxnRepo) Create(ctx context.Context, tx *domain.BorrowTransaction) error {
@@ -274,6 +275,10 @@ func (r *handlerFakeTxnRepo) Create(ctx context.Context, tx *domain.BorrowTransa
 }
 
 func (r *handlerFakeTxnRepo) CreateIfUserBelowActiveLimit(ctx context.Context, tx *domain.BorrowTransaction, maxActive int) error {
+	return r.CreateBorrowWithOutbox(ctx, tx, maxActive, nil)
+}
+
+func (r *handlerFakeTxnRepo) CreateBorrowWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, maxActive int, outbox *domain.StockEventOutbox) error {
 	activeCount, err := r.CountActiveByUser(ctx, tx.UserID)
 	if err != nil {
 		return err
@@ -282,6 +287,9 @@ func (r *handlerFakeTxnRepo) CreateIfUserBelowActiveLimit(ctx context.Context, t
 		return domain.ErrActiveBorrowLimitReached
 	}
 	r.txns[tx.ID] = tx
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
 	return nil
 }
 
@@ -310,11 +318,18 @@ func (r *handlerFakeTxnRepo) Update(ctx context.Context, tx *domain.BorrowTransa
 }
 
 func (r *handlerFakeTxnRepo) ReturnIfActive(ctx context.Context, tx *domain.BorrowTransaction) error {
+	return r.ReturnIfActiveWithOutbox(ctx, tx, nil)
+}
+
+func (r *handlerFakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
 	existing, ok := r.txns[tx.ID]
 	if !ok || existing.UserID != tx.UserID || existing.Status != domain.TransactionActive {
 		return domain.ErrTransactionNotActive
 	}
 	r.txns[tx.ID] = tx
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
 	return nil
 }
 

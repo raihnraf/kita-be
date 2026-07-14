@@ -57,6 +57,7 @@ Selain fitur wajib dan nilai plus dari soal, backend ini juga menambahkan bebera
 - **Advisory lock untuk race condition borrow**: pengecekan limit pinjam aktif dan pembuatan transaksi dibungkus dengan PostgreSQL advisory lock per user agar request paralel tidak bisa melewati batas maksimal 3 buku.
 - **Stock event idempotency**: constraint unik `(transaction_id, event_type)` pada `book_stock_events` memastikan stok tidak berubah dua kali untuk event transaksi yang sama, meskipun RabbitMQ mengirim duplicate message.
 - **RabbitMQ publisher confirms**: publisher menunggu `ack` dari broker sebelum dianggap berhasil, sehingga kegagalan publish bisa terdeteksi dan dilog.
+- **Transactional outbox untuk RabbitMQ**: Transaction Service menyimpan intent publish event stok di database yang sama dengan transaksi borrow/return, lalu dispatcher mem-publish dan retry sampai sukses.
 - **RabbitMQ consumer reconnect loop**: consumer otomatis reconnect dengan exponential backoff saat broker bermasalah, tanpa harus restart worker secara manual.
 - **Dead Letter Queue**: message yang tetap gagal setelah retry tidak hilang diam-diam, tetapi masuk ke DLQ agar bisa diperiksa.
 - **Integer cents untuk uang**: denda disimpan dan dihitung sebagai integer cents (`fine_amount_cents`), bukan floating-point, agar perhitungan uang tidak terkena error pembulatan.
@@ -186,6 +187,7 @@ psql -h localhost -U postgres -d kita_transaction -f migrations/transaction/001_
 psql -h localhost -U postgres -d kita_transaction -f migrations/transaction/002_create_transaction_audits.up.sql
 psql -h localhost -U postgres -d kita_transaction -f migrations/transaction/003_create_idempotency_records.up.sql
 psql -h localhost -U postgres -d kita_transaction -f migrations/transaction/004_add_book_snapshot_to_borrow_transactions.up.sql
+psql -h localhost -U postgres -d kita_transaction -f migrations/transaction/005_create_stock_event_outbox.up.sql
 ```
 
 Jalankan service di terminal terpisah dengan konfigurasi database dan port masing-masing:
@@ -197,7 +199,7 @@ SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001
 DB_NAME=kita_book RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-worker
 ```
 
-Catatan: `book-api` tetap memakai `RABBITMQ_URL` kosong karena mutasi stok utama berjalan melalui HTTP internal. `transaction-api` dapat mengaktifkan RabbitMQ publisher; duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
+Catatan: `book-api` tetap memakai `RABBITMQ_URL` kosong karena mutasi stok utama berjalan melalui HTTP internal. `transaction-api` dapat mengaktifkan dispatcher outbox RabbitMQ; event yang gagal publish akan dicoba ulang, dan duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
 
 Perintah Makefile yang tersedia:
 
@@ -528,5 +530,5 @@ Status code penting untuk ditangani aplikasi mobile:
 - Repository ini hanya backend, sehingga penilaian UI/UX Flutter berada di repository frontend.
 - Service menggunakan satu instance PostgreSQL dengan database terpisah per service.
 - Tidak ada foreign key lintas service karena referensi antar service dibuat secara logical.
-- Jalur async RabbitMQ tersedia sebagai bonus dan Transaction Service pada Docker Compose default mem-publish event stok. Update stok utama tetap menggunakan HTTP internal; event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)`.
+- Jalur async RabbitMQ tersedia sebagai bonus dan Transaction Service pada Docker Compose default mem-publish event stok melalui transactional outbox. Update stok utama tetap menggunakan HTTP internal; event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)`.
 - Auto-migration Docker berjalan saat volume PostgreSQL masih baru; volume lama perlu migrasi manual.

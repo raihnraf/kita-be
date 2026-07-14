@@ -4,9 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
-
 	"kita-be/internal/platform/rabbitmq"
+	domain "kita-be/internal/transaction/domain"
 )
 
 type StockEventPayload struct {
@@ -29,25 +28,22 @@ func NewPublisher(rmq *rabbitmq.Publisher) *Publisher {
 	return &Publisher{rmq: rmq}
 }
 
-func (p *Publisher) PublishStockDecrease(ctx context.Context, transactionID, transactionRef, userID, bookID string) error {
-	return p.publish(ctx, "DECREASE", rabbitmq.RoutingKeyDec, transactionID, transactionRef, userID, bookID)
-}
+func (p *Publisher) PublishStockEvent(ctx context.Context, event domain.StockEventOutbox) error {
+	routingKey := rabbitmq.RoutingKeyDec
+	if event.EventType == "INCREASE" {
+		routingKey = rabbitmq.RoutingKeyInc
+	}
 
-func (p *Publisher) PublishStockIncrease(ctx context.Context, transactionID, transactionRef, userID, bookID string) error {
-	return p.publish(ctx, "INCREASE", rabbitmq.RoutingKeyInc, transactionID, transactionRef, userID, bookID)
-}
-
-func (p *Publisher) publish(ctx context.Context, eventType, routingKey, transactionID, transactionRef, userID, bookID string) error {
 	payload := StockEventPayload{
-		EventID:        uuid.New().String(),
-		EventType:      eventType,
-		TransactionID:  transactionID,
-		TransactionRef: transactionRef,
-		UserID:         userID,
-		BookID:         bookID,
-		Quantity:       1,
-		OccurredAt:     time.Now().UTC().Format(time.RFC3339),
-		IdempotencyKey: uuid.New().String(),
+		EventID:        event.ID,
+		EventType:      event.EventType,
+		TransactionID:  event.TransactionID,
+		TransactionRef: event.TransactionRef,
+		UserID:         event.UserID,
+		BookID:         event.BookID,
+		Quantity:       event.Quantity,
+		OccurredAt:     event.CreatedAt.UTC().Format(time.RFC3339),
+		IdempotencyKey: event.ID,
 	}
 
 	return p.rmq.Publish(ctx, routingKey, payload)

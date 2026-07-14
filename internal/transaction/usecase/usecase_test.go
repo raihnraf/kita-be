@@ -13,11 +13,12 @@ import (
 )
 
 type fakeTxnRepo struct {
-	txns map[string]*domain.BorrowTransaction
+	txns   map[string]*domain.BorrowTransaction
+	outbox map[string]*domain.StockEventOutbox
 }
 
 func newFakeTxnRepo() *fakeTxnRepo {
-	return &fakeTxnRepo{txns: make(map[string]*domain.BorrowTransaction)}
+	return &fakeTxnRepo{txns: make(map[string]*domain.BorrowTransaction), outbox: make(map[string]*domain.StockEventOutbox)}
 }
 
 func (r *fakeTxnRepo) Create(ctx context.Context, tx *domain.BorrowTransaction) error {
@@ -26,6 +27,10 @@ func (r *fakeTxnRepo) Create(ctx context.Context, tx *domain.BorrowTransaction) 
 }
 
 func (r *fakeTxnRepo) CreateIfUserBelowActiveLimit(ctx context.Context, tx *domain.BorrowTransaction, maxActive int) error {
+	return r.CreateBorrowWithOutbox(ctx, tx, maxActive, nil)
+}
+
+func (r *fakeTxnRepo) CreateBorrowWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, maxActive int, outbox *domain.StockEventOutbox) error {
 	activeCount, err := r.CountActiveByUser(ctx, tx.UserID)
 	if err != nil {
 		return err
@@ -34,6 +39,9 @@ func (r *fakeTxnRepo) CreateIfUserBelowActiveLimit(ctx context.Context, tx *doma
 		return domain.ErrActiveBorrowLimitReached
 	}
 	r.txns[tx.ID] = tx
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
 	return nil
 }
 
@@ -62,11 +70,18 @@ func (r *fakeTxnRepo) Update(ctx context.Context, tx *domain.BorrowTransaction) 
 }
 
 func (r *fakeTxnRepo) ReturnIfActive(ctx context.Context, tx *domain.BorrowTransaction) error {
+	return r.ReturnIfActiveWithOutbox(ctx, tx, nil)
+}
+
+func (r *fakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
 	existing, ok := r.txns[tx.ID]
 	if !ok || existing.UserID != tx.UserID || existing.Status != domain.TransactionActive {
 		return domain.ErrTransactionNotActive
 	}
 	r.txns[tx.ID] = tx
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
 	return nil
 }
 
@@ -386,6 +401,29 @@ func TestBorrowIdempotencyDifferentBodyRejected(t *testing.T) {
 	}
 }
 
+func TestBorrowEnqueuesStockDecreaseOutbox(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+
+	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+	output, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed, got: %v", err)
+	}
+
+	if len(txnRepo.outbox) != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", len(txnRepo.outbox))
+	}
+	for _, event := range txnRepo.outbox {
+		if event.EventType != "DECREASE" || event.TransactionID != output.Transaction.ID || event.BookID != "book-1" {
+			t.Fatalf("unexpected outbox event: %+v", event)
+		}
+	}
+}
+
 func TestReturnSuccess(t *testing.T) {
 	txnRepo := newFakeTxnRepo()
 	auditRepo := newFakeAuditRepo()
@@ -547,6 +585,39 @@ func TestReturnIdempotencyDifferentTransactionRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected same return idempotency key with different transaction to be rejected")
+	}
+}
+
+func TestReturnEnqueuesStockIncreaseOutbox(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+
+	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+	borrowOutput, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed, got: %v", err)
+	}
+
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	if _, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
+		TransactionID:  borrowOutput.Transaction.ID,
+		UserID:         "user-1",
+		IdempotencyKey: "return-outbox-1",
+	}); err != nil {
+		t.Fatalf("expected return to succeed, got: %v", err)
+	}
+
+	var sawIncrease bool
+	for _, event := range txnRepo.outbox {
+		if event.EventType == "INCREASE" && event.TransactionID == borrowOutput.Transaction.ID && event.BookID == "book-1" {
+			sawIncrease = true
+		}
+	}
+	if !sawIncrease {
+		t.Fatalf("expected return to enqueue INCREASE outbox event, got %+v", txnRepo.outbox)
 	}
 }
 

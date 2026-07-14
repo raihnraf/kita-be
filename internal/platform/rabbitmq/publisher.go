@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -61,12 +62,14 @@ func (p *Publisher) Setup() error {
 
 // Publish sends a message to the exchange using publisher confirms.
 // Returns an error if the broker nacks the message or the context expires.
-// Logs a warning and returns nil (non-fatal) when not connected so callers
-// can decide whether to treat async publish failure as critical.
+// Attempts a reconnect when disconnected and returns an error if publishing
+// cannot be confirmed, allowing durable outbox dispatchers to retry later.
 func (p *Publisher) Publish(ctx context.Context, routingKey string, payload interface{}) error {
 	if !p.conn.IsConnected() {
-		logger.Warn("rabbitmq not connected, skipping publish", "routing_key", routingKey)
-		return nil
+		logger.Warn("rabbitmq not connected, attempting reconnect", "routing_key", routingKey)
+		if err := p.conn.Reconnect(3, time.Second); err != nil {
+			return fmt.Errorf("rabbitmq not connected: %w", err)
+		}
 	}
 
 	ch, err := p.conn.Channel()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	domain "kita-be/internal/transaction/domain"
@@ -15,6 +16,10 @@ type TransactionRepository struct {
 
 func NewTransactionRepository(pool *pgxpool.Pool) *TransactionRepository {
 	return &TransactionRepository{pool: pool}
+}
+
+type dbExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
 func (r *TransactionRepository) Create(ctx context.Context, tx *domain.BorrowTransaction) error {
@@ -36,6 +41,10 @@ func (r *TransactionRepository) Create(ctx context.Context, tx *domain.BorrowTra
 }
 
 func (r *TransactionRepository) CreateIfUserBelowActiveLimit(ctx context.Context, tx *domain.BorrowTransaction, maxActive int) error {
+	return r.CreateBorrowWithOutbox(ctx, tx, maxActive, nil)
+}
+
+func (r *TransactionRepository) CreateBorrowWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, maxActive int, outbox *domain.StockEventOutbox) error {
 	dbtx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -66,6 +75,11 @@ func (r *TransactionRepository) CreateIfUserBelowActiveLimit(ctx context.Context
 		tx.CreatedAt, tx.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+	if outbox != nil {
+		if err := insertStockEventOutbox(ctx, dbtx, outbox); err != nil {
+			return fmt.Errorf("failed to enqueue stock event outbox: %w", err)
+		}
 	}
 
 	if err := dbtx.Commit(ctx); err != nil {
@@ -134,11 +148,21 @@ func (r *TransactionRepository) Update(ctx context.Context, tx *domain.BorrowTra
 }
 
 func (r *TransactionRepository) ReturnIfActive(ctx context.Context, tx *domain.BorrowTransaction) error {
+	return r.ReturnIfActiveWithOutbox(ctx, tx, nil)
+}
+
+func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
+	dbtx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = dbtx.Rollback(ctx) }()
+
 	query := `
 		UPDATE borrow_transactions SET returned_at = $3, status = $4, fine_amount = $5, late_days = $6, stock_event_id = $7, updated_at = $8
 		WHERE id = $1 AND user_id = $2 AND status = 'ACTIVE'
 	`
-	result, err := r.pool.Exec(ctx, query,
+	result, err := dbtx.Exec(ctx, query,
 		tx.ID, tx.UserID, tx.ReturnedAt, string(tx.Status), fineAmountDecimal(tx.FineAmountCents),
 		tx.LateDays, tx.StockEventID, tx.UpdatedAt,
 	)
@@ -148,7 +172,29 @@ func (r *TransactionRepository) ReturnIfActive(ctx context.Context, tx *domain.B
 	if result.RowsAffected() == 0 {
 		return domain.ErrTransactionNotActive
 	}
+	if outbox != nil {
+		if err := insertStockEventOutbox(ctx, dbtx, outbox); err != nil {
+			return fmt.Errorf("failed to enqueue stock event outbox: %w", err)
+		}
+	}
+
+	if err := dbtx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
 	return nil
+}
+
+func insertStockEventOutbox(ctx context.Context, execer dbExecer, outbox *domain.StockEventOutbox) error {
+	query := `
+		INSERT INTO stock_event_outbox (id, event_type, transaction_id, transaction_ref, user_id, book_id, quantity, status, attempts, next_attempt_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (transaction_id, event_type) DO NOTHING
+	`
+	_, err := execer.Exec(ctx, query,
+		outbox.ID, outbox.EventType, outbox.TransactionID, outbox.TransactionRef, outbox.UserID, outbox.BookID,
+		outbox.Quantity, string(outbox.Status), outbox.Attempts, outbox.NextAttemptAt, outbox.CreatedAt, outbox.UpdatedAt,
+	)
+	return err
 }
 
 func (r *TransactionRepository) FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {
