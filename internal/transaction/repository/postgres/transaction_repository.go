@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,7 +57,7 @@ func (r *TransactionRepository) CreateBorrowWithOutbox(ctx context.Context, tx *
 	}
 
 	var count int
-	if err := dbtx.QueryRow(ctx, `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND status = 'ACTIVE'`, tx.UserID).Scan(&count); err != nil {
+	if err := dbtx.QueryRow(ctx, `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND status IN ('ACTIVE', 'PENDING', 'RETURN_PENDING')`, tx.UserID).Scan(&count); err != nil {
 		return fmt.Errorf("failed to count active transactions: %w", err)
 	}
 	if count >= maxActive {
@@ -152,6 +153,10 @@ func (r *TransactionRepository) ReturnIfActive(ctx context.Context, tx *domain.B
 }
 
 func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
+	return r.StartReturnWithOutbox(ctx, tx, outbox)
+}
+
+func (r *TransactionRepository) StartReturnWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
 	dbtx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -159,15 +164,15 @@ func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx
 	defer func() { _ = dbtx.Rollback(ctx) }()
 
 	query := `
-		UPDATE borrow_transactions SET returned_at = $3, status = $4, fine_amount_cents = $5, late_days = $6, stock_event_id = $7, updated_at = $8
+		UPDATE borrow_transactions SET returned_at = $3, status = 'RETURN_PENDING', fine_amount_cents = $4, late_days = $5, stock_event_id = NULL, updated_at = $6
 		WHERE id = $1 AND user_id = $2 AND status = 'ACTIVE'
 	`
 	result, err := dbtx.Exec(ctx, query,
-		tx.ID, tx.UserID, tx.ReturnedAt, string(tx.Status), tx.FineAmountCents,
-		tx.LateDays, tx.StockEventID, tx.UpdatedAt,
+		tx.ID, tx.UserID, tx.ReturnedAt, tx.FineAmountCents,
+		tx.LateDays, tx.UpdatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to return transaction: %w", err)
+		return fmt.Errorf("failed to start return transaction: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return domain.ErrTransactionNotActive
@@ -179,7 +184,7 @@ func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx
 	}
 
 	if err := dbtx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit return transaction: %w", err)
+		return fmt.Errorf("failed to commit return start transaction: %w", err)
 	}
 	return nil
 }
@@ -220,7 +225,7 @@ func (r *TransactionRepository) UpdateStockEventID(ctx context.Context, id, stoc
 func (r *TransactionRepository) FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {
 	query := `
 		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
-		FROM borrow_transactions WHERE user_id = $1 AND status = 'ACTIVE'
+		FROM borrow_transactions WHERE user_id = $1 AND status IN ('ACTIVE', 'PENDING', 'RETURN_PENDING')
 		ORDER BY borrowed_at DESC
 	`
 
@@ -251,7 +256,7 @@ func (r *TransactionRepository) FindActiveByUser(ctx context.Context, userID str
 }
 
 func (r *TransactionRepository) CountActiveByUser(ctx context.Context, userID string) (int, error) {
-	query := `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND status = 'ACTIVE'`
+	query := `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND status IN ('ACTIVE', 'PENDING', 'RETURN_PENDING')`
 
 	var count int
 	err := r.pool.QueryRow(ctx, query, userID).Scan(&count)
@@ -337,4 +342,152 @@ func (r *TransactionRepository) ListAll(ctx context.Context, page, perPage int) 
 	}
 
 	return txs, total, nil
+}
+
+func (r *TransactionRepository) ActivateBorrow(ctx context.Context, id, stockEventID string) error {
+	result, err := r.pool.Exec(ctx,
+		`UPDATE borrow_transactions SET status = 'ACTIVE', stock_event_id = $2, updated_at = NOW() WHERE id = $1 AND status = 'PENDING'`,
+		id, stockEventID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to activate borrow: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrTransactionNotPending
+	}
+	return nil
+}
+
+func (r *TransactionRepository) CancelBorrow(ctx context.Context, id string) error {
+	result, err := r.pool.Exec(ctx,
+		`UPDATE borrow_transactions SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1 AND status = 'PENDING'`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to cancel borrow: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrTransactionNotPending
+	}
+	return nil
+}
+
+func (r *TransactionRepository) SkipOutboxByTransactionID(ctx context.Context, transactionID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE stock_event_outbox SET status = 'SKIPPED', updated_at = NOW() WHERE transaction_id = $1 AND status IN ('PENDING', 'FAILED')`,
+		transactionID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to skip outbox events: %w", err)
+	}
+	return nil
+}
+
+func (r *TransactionRepository) FindPendingOlderThan(ctx context.Context, threshold time.Time) ([]domain.BorrowTransaction, error) {
+	query := `
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
+		FROM borrow_transactions
+		WHERE status IN ('PENDING', 'RETURN_PENDING') AND created_at < $1
+	`
+	rows, err := r.pool.Query(ctx, query, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var txs []domain.BorrowTransaction
+	for rows.Next() {
+		var tx domain.BorrowTransaction
+		var status string
+		if err := rows.Scan(
+			&tx.ID, &tx.TransactionRef, &tx.UserID, &tx.BookID,
+			&tx.BookISBN, &tx.BookTitle, &tx.BookAuthor,
+			&tx.BorrowedAt, &tx.DueAt, &tx.ReturnedAt, &status,
+			&tx.FineAmountCents, &tx.LateDays, &tx.StockEventID,
+			&tx.CreatedAt, &tx.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan pending transaction: %w", err)
+		}
+		tx.Status = domain.TransactionStatus(status)
+		txs = append(txs, tx)
+	}
+	return txs, nil
+}
+
+func (r *TransactionRepository) FinalizeReturn(ctx context.Context, id, stockEventID string) error {
+	result, err := r.pool.Exec(ctx, `
+		UPDATE borrow_transactions
+		SET status = CASE WHEN late_days > 0 THEN 'RETURNED_LATE' ELSE 'RETURNED' END,
+			stock_event_id = $2,
+			updated_at = NOW()
+		WHERE id = $1 AND status = 'RETURN_PENDING'
+	`, id, stockEventID)
+	if err != nil {
+		return fmt.Errorf("failed to finalize return: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrTransactionNotPending
+	}
+	return nil
+}
+
+func (r *TransactionRepository) RejectReturn(ctx context.Context, id string) error {
+	result, err := r.pool.Exec(ctx, `
+		UPDATE borrow_transactions
+		SET status = 'ACTIVE', returned_at = NULL, fine_amount_cents = 0, late_days = 0, stock_event_id = NULL, updated_at = NOW()
+		WHERE id = $1 AND status = 'RETURN_PENDING'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("failed to reject return: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrTransactionNotPending
+	}
+	return nil
+}
+
+func (r *TransactionRepository) ReconcileCancelBorrow(ctx context.Context, id string, outbox *domain.StockEventOutbox) error {
+	dbtx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = dbtx.Rollback(ctx) }()
+
+	res, err := dbtx.Exec(ctx, `UPDATE borrow_transactions SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1 AND status = 'PENDING'`, id)
+	if err != nil {
+		return fmt.Errorf("failed to cancel transaction: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return domain.ErrTransactionNotPending
+	}
+
+	if _, err := dbtx.Exec(ctx, `UPDATE stock_event_outbox SET status = 'SKIPPED', updated_at = NOW() WHERE transaction_id = $1 AND event_type = 'DECREASE' AND status IN ('PENDING', 'FAILED')`, id); err != nil {
+		return fmt.Errorf("failed to skip original decrease outbox event: %w", err)
+	}
+
+	if outbox != nil {
+		if err := insertStockEventOutbox(ctx, dbtx, outbox); err != nil {
+			return fmt.Errorf("failed to insert compensation outbox event: %w", err)
+		}
+	}
+
+	if err := dbtx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit reconciliation cancel: %w", err)
+	}
+	return nil
+}
+
+func (r *TransactionRepository) RequeueStockCommand(ctx context.Context, transactionID, eventType string) error {
+	result, err := r.pool.Exec(ctx, `
+		UPDATE stock_event_outbox
+		SET status = 'PENDING', last_error = NULL, next_attempt_at = NOW(), updated_at = NOW()
+		WHERE transaction_id = $1 AND event_type = $2 AND status IN ('PUBLISHED', 'FAILED', 'PROCESSING')
+	`, transactionID, eventType)
+	if err != nil {
+		return fmt.Errorf("failed to requeue stock command: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("stock command not found or not eligible for requeue")
+	}
+	return nil
 }

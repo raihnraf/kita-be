@@ -12,8 +12,22 @@ import (
 )
 
 type fakeBookRepo struct {
-	books       map[string]*domain.Book
-	stockEvents map[string]*domain.BookStockEvent
+	books        map[string]*domain.Book
+	stockEvents  map[string]*domain.BookStockEvent
+	findEventErr error
+}
+
+type fakeResultPublisher struct {
+	published []*domain.BookStockEvent
+	err       error
+}
+
+func (p *fakeResultPublisher) PublishStockResult(ctx context.Context, event *domain.BookStockEvent) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.published = append(p.published, event)
+	return nil
 }
 
 func newFakeBookRepo() *fakeBookRepo {
@@ -94,27 +108,33 @@ func (r *fakeBookRepo) RecordStockEvent(ctx context.Context, event *domain.BookS
 }
 
 func (r *fakeBookRepo) FindStockEventByEventID(ctx context.Context, eventID string) (*domain.BookStockEvent, error) {
+	if r.findEventErr != nil {
+		return nil, r.findEventErr
+	}
 	for _, event := range r.stockEvents {
 		if event.EventID == eventID {
 			return event, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func (r *fakeBookRepo) FindStockEventByTransactionID(ctx context.Context, txnID string, eventType string) (*domain.BookStockEvent, error) {
+	if r.findEventErr != nil {
+		return nil, r.findEventErr
+	}
 	for _, event := range r.stockEvents {
 		if event.TransactionID == txnID && string(event.EventType) == eventType {
 			return event, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func TestHandlerDecreaseEvent(t *testing.T) {
 	msg := rabbitmq.Message{
 		EventID:        "evt-1",
-		EventType:      "DECREASE",
+		EventType:      rabbitmq.EventTypeDecreaseStockRequested,
 		TransactionID:  "txn-1",
 		TransactionRef: "TXN-1",
 		UserID:         "user-1",
@@ -126,8 +146,8 @@ func TestHandlerDecreaseEvent(t *testing.T) {
 	if msg.EventID != "evt-1" {
 		t.Error("expected event_id evt-1")
 	}
-	if msg.EventType != "DECREASE" {
-		t.Error("expected event_type DECREASE")
+	if msg.EventType != rabbitmq.EventTypeDecreaseStockRequested {
+		t.Errorf("expected event_type %s", rabbitmq.EventTypeDecreaseStockRequested)
 	}
 	if msg.Quantity != 1 {
 		t.Error("expected quantity 1")
@@ -137,7 +157,7 @@ func TestHandlerDecreaseEvent(t *testing.T) {
 func TestHandlerIncreaseEvent(t *testing.T) {
 	msg := rabbitmq.Message{
 		EventID:        "evt-2",
-		EventType:      "INCREASE",
+		EventType:      rabbitmq.EventTypeIncreaseStockRequested,
 		TransactionID:  "txn-2",
 		TransactionRef: "TXN-2",
 		UserID:         "user-1",
@@ -149,8 +169,8 @@ func TestHandlerIncreaseEvent(t *testing.T) {
 	if msg.EventID != "evt-2" {
 		t.Error("expected event_id evt-2")
 	}
-	if msg.EventType != "INCREASE" {
-		t.Error("expected event_type INCREASE")
+	if msg.EventType != rabbitmq.EventTypeIncreaseStockRequested {
+		t.Errorf("expected event_type %s", rabbitmq.EventTypeIncreaseStockRequested)
 	}
 }
 
@@ -171,7 +191,7 @@ func TestHandlerUnknownEventType(t *testing.T) {
 func TestMessageRetryCountLogic(t *testing.T) {
 	msg := rabbitmq.Message{
 		EventID:    "evt-4",
-		EventType:  "DECREASE",
+		EventType:  rabbitmq.EventTypeDecreaseStockRequested,
 		RetryCount: 3,
 	}
 
@@ -189,7 +209,7 @@ func TestMessageRetryCountLogic(t *testing.T) {
 func TestMessagePayloadCompleteness(t *testing.T) {
 	msg := rabbitmq.Message{
 		EventID:        "evt-99",
-		EventType:      "DECREASE",
+		EventType:      rabbitmq.EventTypeDecreaseStockRequested,
 		TransactionID:  "txn-99",
 		TransactionRef: "TXN-2026071300001",
 		UserID:         "user-99",
@@ -224,13 +244,14 @@ func TestMessagePayloadCompleteness(t *testing.T) {
 
 func TestHandlerDuplicateDecreaseEventDoesNotDoubleApplyStock(t *testing.T) {
 	repo := newFakeBookRepo()
+	publisher := &fakeResultPublisher{}
 	book := domain.NewBook("book-1", "978-001", "Go Programming", "Author", 3)
 	repo.books[book.ID] = book
-	handler := messaging.NewHandler(usecase.NewStockUsecase(repo))
+	handler := messaging.NewHandler(usecase.NewStockUsecase(repo), publisher)
 
 	msg := rabbitmq.Message{
 		EventID:        "evt-duplicate",
-		EventType:      "DECREASE",
+		EventType:      rabbitmq.EventTypeDecreaseStockRequested,
 		TransactionID:  "txn-1",
 		TransactionRef: "TXN-1",
 		UserID:         "user-1",
@@ -247,5 +268,95 @@ func TestHandlerDuplicateDecreaseEventDoesNotDoubleApplyStock(t *testing.T) {
 
 	if book.AvailableStock != 2 {
 		t.Fatalf("expected stock to decrease once to 2, got %d", book.AvailableStock)
+	}
+	if len(publisher.published) != 2 {
+		t.Fatalf("expected result event to be published for both deliveries, got %d", len(publisher.published))
+	}
+}
+
+func TestHandlerPublishesRejectedResultWhenDecreaseFails(t *testing.T) {
+	repo := newFakeBookRepo()
+	publisher := &fakeResultPublisher{}
+	book := domain.NewBook("book-1", "978-001", "Go Programming", "Author", 0)
+	repo.books[book.ID] = book
+	handler := messaging.NewHandler(usecase.NewStockUsecase(repo), publisher)
+
+	msg := rabbitmq.Message{
+		EventID:        "evt-dec-reject",
+		EventType:      rabbitmq.EventTypeDecreaseStockRequested,
+		TransactionID:  "txn-1",
+		TransactionRef: "TXN-1",
+		UserID:         "user-1",
+		BookID:         book.ID,
+		Quantity:       1,
+	}
+
+	if err := handler.HandleStockEvent(msg); err != nil {
+		t.Fatalf("expected rejected decrease to be published as result, got: %v", err)
+	}
+	if book.AvailableStock != 0 {
+		t.Fatalf("expected stock to remain unchanged on rejected decrease, got %d", book.AvailableStock)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("expected one published result, got %d", len(publisher.published))
+	}
+	if publisher.published[0].Status != domain.StockEventFailed {
+		t.Fatalf("expected published event status FAILED, got %s", publisher.published[0].Status)
+	}
+}
+
+func TestHandlerPublishesSuccessResultWhenIncreaseSucceeds(t *testing.T) {
+	repo := newFakeBookRepo()
+	publisher := &fakeResultPublisher{}
+	book := domain.NewBook("book-1", "978-001", "Go Programming", "Author", 3)
+	repo.books[book.ID] = book
+	handler := messaging.NewHandler(usecase.NewStockUsecase(repo), publisher)
+	if err := book.DecreaseStock(1); err != nil {
+		t.Fatalf("failed to arrange stock decrease: %v", err)
+	}
+
+	msg := rabbitmq.Message{
+		EventID:        "evt-inc-1",
+		EventType:      rabbitmq.EventTypeIncreaseStockRequested,
+		TransactionID:  "txn-1",
+		TransactionRef: "TXN-1",
+		UserID:         "user-1",
+		BookID:         book.ID,
+		Quantity:       1,
+	}
+	if err := handler.HandleStockEvent(msg); err != nil {
+		t.Fatalf("expected increase event to succeed, got %v", err)
+	}
+	if book.AvailableStock != 3 {
+		t.Fatalf("expected stock to be restored to 3, got %d", book.AvailableStock)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("expected one published result, got %d", len(publisher.published))
+	}
+	if publisher.published[0].Status != domain.StockEventProcessed {
+		t.Fatalf("expected published event status PROCESSED, got %s", publisher.published[0].Status)
+	}
+}
+
+func TestHandlerRetriesWhenResultPublishingFails(t *testing.T) {
+	repo := newFakeBookRepo()
+	publisher := &fakeResultPublisher{err: fmt.Errorf("broker unavailable")}
+	book := domain.NewBook("book-1", "978-001", "Go Programming", "Author", 3)
+	repo.books[book.ID] = book
+	handler := messaging.NewHandler(usecase.NewStockUsecase(repo), publisher)
+
+	msg := rabbitmq.Message{
+		EventID:        "evt-dec-2",
+		EventType:      rabbitmq.EventTypeDecreaseStockRequested,
+		TransactionID:  "txn-1",
+		TransactionRef: "TXN-1",
+		UserID:         "user-1",
+		BookID:         book.ID,
+		Quantity:       1,
+	}
+
+	err := handler.HandleStockEvent(msg)
+	if err == nil {
+		t.Fatal("expected publish failure to be retried")
 	}
 }

@@ -47,7 +47,7 @@ func (uc *StockUsecase) DecreaseStockEvent(ctx context.Context, bookID string, q
 	if eventID != "" {
 		existingEvent, err := uc.bookRepo.FindStockEventByEventID(ctx, eventID)
 		if err == nil && existingEvent != nil {
-			if existingEvent.Status == domain.StockEventProcessed {
+			if existingEvent.Status == domain.StockEventProcessed || existingEvent.Status == domain.StockEventFailed {
 				return existingEvent, nil
 			}
 			return nil, apperror.Conflict("insufficient stock")
@@ -57,7 +57,7 @@ func (uc *StockUsecase) DecreaseStockEvent(ctx context.Context, bookID string, q
 	if transactionID != "" {
 		existingEvent, err := uc.bookRepo.FindStockEventByTransactionID(ctx, transactionID, string(domain.StockEventDecrease))
 		if err == nil && existingEvent != nil {
-			if existingEvent.Status == domain.StockEventProcessed {
+			if existingEvent.Status == domain.StockEventProcessed || existingEvent.Status == domain.StockEventFailed {
 				return existingEvent, nil
 			}
 			return nil, apperror.Conflict("insufficient stock")
@@ -78,7 +78,14 @@ func (uc *StockUsecase) DecreaseStockEvent(ctx context.Context, bookID string, q
 
 	appliedEvent, err := uc.bookRepo.ApplyStockEvent(ctx, event)
 	if err != nil {
-		return nil, apperror.Conflict("insufficient stock")
+		if errors.Is(err, domain.ErrInsufficientStock) {
+			failedEvent := newFailedStockEvent(bookID, qty, transactionID, event.EventID, domain.StockEventDecrease, err.Error())
+			if recordErr := uc.bookRepo.RecordStockEvent(ctx, failedEvent); recordErr != nil {
+				return nil, fmt.Errorf("failed to record rejected decrease stock event: %w", recordErr)
+			}
+			return failedEvent, nil
+		}
+		return nil, fmt.Errorf("failed to decrease stock: %w", err)
 	}
 
 	return appliedEvent, nil
@@ -92,7 +99,7 @@ func (uc *StockUsecase) IncreaseStockEvent(ctx context.Context, bookID string, q
 	if eventID != "" {
 		existingEvent, err := uc.bookRepo.FindStockEventByEventID(ctx, eventID)
 		if err == nil && existingEvent != nil {
-			if existingEvent.Status == domain.StockEventProcessed {
+			if existingEvent.Status == domain.StockEventProcessed || existingEvent.Status == domain.StockEventFailed {
 				return existingEvent, nil
 			}
 			return nil, fmt.Errorf("failed to increase stock: previously failed")
@@ -102,7 +109,7 @@ func (uc *StockUsecase) IncreaseStockEvent(ctx context.Context, bookID string, q
 	if transactionID != "" {
 		existingEvent, err := uc.bookRepo.FindStockEventByTransactionID(ctx, transactionID, string(domain.StockEventIncrease))
 		if err == nil && existingEvent != nil {
-			if existingEvent.Status == domain.StockEventProcessed {
+			if existingEvent.Status == domain.StockEventProcessed || existingEvent.Status == domain.StockEventFailed {
 				return existingEvent, nil
 			}
 			return nil, fmt.Errorf("failed to increase stock: previously failed")
@@ -124,7 +131,11 @@ func (uc *StockUsecase) IncreaseStockEvent(ctx context.Context, bookID string, q
 	appliedEvent, err := uc.bookRepo.ApplyStockEvent(ctx, event)
 	if err != nil {
 		if errors.Is(err, domain.ErrStockExceedsTotal) {
-			return nil, apperror.Conflict(domain.ErrStockExceedsTotal.Error())
+			failedEvent := newFailedStockEvent(bookID, qty, transactionID, event.EventID, domain.StockEventIncrease, err.Error())
+			if recordErr := uc.bookRepo.RecordStockEvent(ctx, failedEvent); recordErr != nil {
+				return nil, fmt.Errorf("failed to record rejected increase stock event: %w", recordErr)
+			}
+			return failedEvent, nil
 		}
 		return nil, fmt.Errorf("failed to increase stock: %w", err)
 	}
@@ -137,4 +148,36 @@ func eventIDOrNew(eventID string) string {
 		return eventID
 	}
 	return uuid.New().String()
+}
+
+func newFailedStockEvent(bookID string, qty int, transactionID string, eventID string, eventType domain.StockEventType, errMessage string) *domain.BookStockEvent {
+	now := time.Now()
+	message := errMessage
+	return &domain.BookStockEvent{
+		ID:            uuid.New().String(),
+		EventID:       eventIDOrNew(eventID),
+		BookID:        bookID,
+		TransactionID: transactionID,
+		EventType:     eventType,
+		Quantity:      qty,
+		Status:        domain.StockEventFailed,
+		ErrorMessage:  &message,
+		ProcessedAt:   &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+}
+
+func (uc *StockUsecase) HasProcessedDecreaseEvent(ctx context.Context, transactionID string) (bool, error) {
+	if transactionID == "" {
+		return false, fmt.Errorf("transaction ID is required to verify processed decrease event")
+	}
+	event, err := uc.bookRepo.FindStockEventByTransactionID(ctx, transactionID, string(domain.StockEventDecrease))
+	if err != nil {
+		if errors.Is(err, domain.ErrStockEventNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to verify processed decrease event: %w", err)
+	}
+	return event != nil && event.Status == domain.StockEventProcessed, nil
 }

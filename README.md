@@ -1,5 +1,9 @@
 # Kita Library Backend
 
+Document Role: Primary project overview  
+Scope: Backend only  
+Status: Primary current document
+
 Backend untuk prototipe Sistem Informasi Perpustakaan sesuai `soal.md`.
 
 Repository ini hanya berisi backend. Aplikasi mobile Flutter berada di repository terpisah dan menggunakan backend ini sebagai API server.
@@ -15,12 +19,24 @@ go build ./...
 docker compose config
 ```
 
-Dokumen yang paling relevan untuk reviewer backend:
+Dokumen primary current untuk reviewer backend:
 
+- `BACKEND_SUBMISSION_CHECKLIST.md` untuk jalur review tercepat dan status verifikasi terakhir
+- `BACKEND_DEMO_SCRIPT.md` untuk narasi demo backend 3-5 menit saat submission
+- `SUBMISSION_NARRATIVE.md` untuk alasan desain arsitektur backend
 - `README.md` untuk arsitektur, cara menjalankan, dan mapping ke `soal.md`
 - `docs/openapi.yaml` untuk kontrak API
 - `internal/` untuk implementasi Clean Architecture per service
 - `audit.md` untuk ringkasan verifikasi backend saat ini
+- `audit_final.md` untuk audit akhir arsitektur dan sisa polish yang non-blocking
+
+Dokumen supporting current dan archived:
+
+- `UPGRADE_REPORT.md` untuk ringkasan upgrade engineering yang membawa codebase ke state saat ini
+- `VERIFICATION.md` untuk snapshot bukti verifikasi yang lebih panjang
+- `audit_2.md` adalah arsip review pre-fix dan bukan representasi current state
+
+Catatan penting reviewer: endpoint `borrow` dan `return` memang didesain async. Borrow mulai dari `PENDING`, return mulai dari `RETURN_PENDING`, lalu final state dilihat dari endpoint detail transaksi setelah result event diproses. Jika stock restore untuk return ditolak, status transaksi dapat kembali ke `ACTIVE`.
 
 ---
 
@@ -53,7 +69,7 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 |---|---|
 | Semua request ke Transaction Service harus menyertakan JWT valid | Endpoint transaksi menggunakan middleware JWT |
 | User tidak boleh meminjam buku dengan stok 0 | Stok dicek saat proses borrow dan operasi pengurangan stok menolak stok kosong |
-| Jika buku dipinjam, stok Book Service berkurang | Transaction Service memanggil Book Service secara internal; tersedia juga jalur RabbitMQ sebagai bonus |
+| Jika buku dipinjam, stok Book Service berkurang | Borrow dan return memakai alur DB-first + transactional outbox. Stok dimutasi oleh Book Worker melalui RabbitMQ, lalu status transaksi difinalkan dari result event yang idempoten |
 | Maksimal 3 buku dipinjam sekaligus | Dibatasi oleh konfigurasi `MAX_ACTIVE_BORROWS` dan validasi di usecase |
 | Pengembalian terlambat dikenakan denda | Denda dihitung berdasarkan `LOAN_DAYS` dan `DAILY_FINE_AMOUNT` |
 
@@ -76,15 +92,17 @@ Selain fitur wajib dan nilai plus dari soal, backend ini juga menambahkan bebera
 - **Stock event idempotency**: constraint unik `(transaction_id, event_type)` pada `book_stock_events` memastikan stok tidak berubah dua kali untuk event transaksi yang sama, meskipun RabbitMQ mengirim duplicate message.
 - **RabbitMQ publisher confirms**: publisher menunggu `ack` dari broker sebelum dianggap berhasil, sehingga kegagalan publish bisa terdeteksi dan dilog.
 - **Transactional outbox untuk RabbitMQ**: Transaction Service menyimpan intent publish event stok di database yang sama dengan transaksi borrow/return, lalu dispatcher mem-publish dan retry sampai sukses.
-- **RabbitMQ consumer reconnect loop**: consumer otomatis retry dan reconnect saat broker bermasalah; backoff eksponensial dipakai pada jalur reconnect broker.
+- **RabbitMQ consumer reconnect loop**: consumer otomatis retry dan reconnect saat broker bermasalah; jalur reconnect broker memakai exponential backoff, sementara startup retry dibuat sederhana dengan delay tetap.
 - **Dead Letter Queue**: message yang tetap gagal setelah retry tidak hilang diam-diam, tetapi masuk ke DLQ agar bisa diperiksa.
-- **Kompensasi stok yang durable**: jika mutasi stok lintas service sudah terjadi tetapi transaksi borrow/return gagal disimpan, service mencoba kompensasi langsung dan fallback ke outbox agar rollback tetap bisa diproses ulang. Event fallback juga membawa metadata kompensasi agar jalur recovery tetap dapat ditelusuri saat review atau audit.
+- **Async saga untuk borrow dan return**: request borrow membuat transaksi `PENDING` dan internal outbox operasi stock decrease; request return membuat transaksi `RETURN_PENDING` dan internal outbox operasi stock increase. Di boundary RabbitMQ, command/result memakai contract eksplisit seperti `DecreaseStockRequested`, `DecreaseStockSucceeded`, `IncreaseStockRequested`, dan `IncreaseStockRejected`. Book Worker memproses command stok secara idempoten lalu mem-publish result event, dan Transaction Service memfinalkan status transaksi dari result tersebut.
+- **Deterministic command replay**: Book Service menyimpan hasil sukses atau gagal dari stock command per `(transaction_id, event_type)`. Jika message di-retry atau dipublish ulang oleh reconciliation worker, hasilnya tetap sama dan tidak tergantung kondisi stok terbaru di saat retry.
+- **Reconciliation sebagai re-dispatch**: jika transaksi terlalu lama di `PENDING` atau `RETURN_PENDING`, reconciliation worker tidak langsung membatalkan bisnis. Worker akan menandai command outbox untuk dipublish ulang agar result event bisa diproduksi ulang secara aman.
 - **Integer cents untuk uang**: denda dihitung, diekspos, dan disimpan langsung sebagai integer cents (`fine_amount_cents` dengan tipe `BIGINT` di PostgreSQL) untuk menghindari floating-point error dan overhead konversi database-ke-aplikasi.
-- **Double-return protection**: proses return memakai idempotency replay, conditional update, stock event idempotency, dan kompensasi durable; request paralel tidak meninggalkan kenaikan stok ganda permanen.
+- **Double-return protection**: proses return memakai idempotency replay, conditional update `WHERE status='ACTIVE'`, transactional outbox, dan stock event idempotency; request paralel tidak meninggalkan kenaikan stok ganda permanen.
 - **Book snapshot saat borrow**: judul, penulis, dan ISBN disimpan ke transaksi saat peminjaman, sehingga history tetap stabil meskipun data buku berubah dan tidak perlu query Book Service per baris history.
 - **Token type enforcement**: JWT membawa field `token_type`, sehingga access token dan refresh token tidak bisa saling tertukar penggunaannya.
 - **Rate limiting**: endpoint auth dan write transaction dibatasi dengan Fiber rate limiter untuk mengurangi brute force dan request spam.
-- **golangci-lint clean**: konfigurasi lint mencakup `errcheck`, `govet`, `ineffassign`, `staticcheck`, dan `unused` untuk menjaga kualitas kode.
+- **golangci-lint config tersedia**: konfigurasi lint mencakup `errcheck`, `govet`, `ineffassign`, `staticcheck`, dan `unused` untuk menjaga kualitas kode.
 
 ---
 
@@ -114,9 +132,9 @@ Komunikasi antar service:
 | Flutter App | Identity Service | HTTP | Register, login, refresh token, profil |
 | Flutter App | Book Service | HTTP | Melihat katalog, detail buku, stok |
 | Flutter App | Transaction Service | HTTP + JWT | Peminjaman, pengembalian, riwayat |
-| Transaction Service | Book Service | HTTP internal | Mengurangi atau menambah stok saat borrow/return |
-| Transaction Service | RabbitMQ | AMQP | Publish event stok sebagai jalur async bonus |
-| Book Worker | RabbitMQ | AMQP consumer | Consume event stok dan update Book DB secara idempoten |
+| Transaction Service | Book Service | HTTP internal | Mengambil snapshot buku saat borrow dan health/readiness check |
+| Transaction Service | RabbitMQ | AMQP | Publish explicit stock command events seperti `DecreaseStockRequested` dan `IncreaseStockRequested` |
+| Book Worker | RabbitMQ | AMQP consumer + publisher | Consume command stok, proses idempoten, lalu publish result event ke Transaction Service |
 
 ---
 
@@ -175,6 +193,16 @@ Seeder data buku:
 ```bash
 go run ./scripts/seed.go
 ```
+
+### Verifikasi Alur End-to-End Otomatis (Saga & Messaging)
+
+Setelah kontainer berjalan dan database di-seed, Anda dapat menjalankan skrip otomatisasi pengujian integrasi asinkron untuk memverifikasi alur Saga:
+
+```bash
+./scripts/verify_flow.sh
+```
+
+Skrip ini akan melakukan registrasi user baru, melakukan login, memilih buku dengan stok tersedia, meminta peminjaman (memantau transisi status `PENDING` -> `ACTIVE` secara asinkron), memverifikasi pengurangan stok di Book Service, meminta pengembalian (memantau transisi `RETURN_PENDING` -> `RETURNED`), dan memverifikasi pemulihan stok buku.
 
 Catatan: pada volume PostgreSQL baru, file `docker/postgres/init.sql` akan membuat database service dan menjalankan migrasi awal secara otomatis.
 
@@ -390,6 +418,13 @@ curl -X POST http://localhost:3002/api/v1/transactions/<transaction_id>/return \
   -d '{"idempotency_key":"demo-return-1"}'
 ```
 
+> **Catatan async:** response borrow akan berstatus `PENDING` dan response return akan berstatus `RETURN_PENDING`. Final state (`ACTIVE`, `CANCELLED`, `RETURNED`, `RETURNED_LATE`, atau kembali ke `ACTIVE` jika pengembalian ditolak) ditentukan setelah Book Worker memproses command stok dan Transaction Service menerima result event. Untuk menunggu final state, poll endpoint detail transaksi:
+>
+> ```bash
+> curl http://localhost:3002/api/v1/transactions/<transaction_id> \
+>   -H "Authorization: Bearer <access_token>"
+> ```
+
 ### 8. Lihat Riwayat
 
 ```bash
@@ -550,5 +585,5 @@ Status code penting untuk ditangani aplikasi mobile:
 - Repository ini hanya backend, sehingga penilaian UI/UX Flutter berada di repository frontend.
 - Service menggunakan satu instance PostgreSQL dengan database terpisah per service.
 - Tidak ada foreign key lintas service karena referensi antar service dibuat secara logical.
-- Jalur async RabbitMQ tersedia sebagai bonus dan Transaction Service pada Docker Compose default mem-publish event stok melalui transactional outbox. Update stok utama tetap menggunakan HTTP internal; event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)`.
+- Jalur async RabbitMQ tersedia sebagai bonus dan menjadi jalur utama sinkronisasi stok pada Docker Compose default. API borrow mengembalikan transaksi `PENDING`, API return mengembalikan transaksi `RETURN_PENDING`, dan final state transaksi diselesaikan setelah result event dari Book Worker diterima. Event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)` dan dapat dipublish ulang oleh reconciliation worker bila result event terlambat.
 - Auto-migration Docker berjalan saat volume PostgreSQL masih baru; volume lama perlu migrasi manual.

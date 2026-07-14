@@ -2,7 +2,6 @@ package usecase_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -10,7 +9,6 @@ import (
 
 	domain "kita-be/internal/book/domain"
 	"kita-be/internal/book/usecase"
-	"kita-be/internal/platform/apperror"
 )
 
 type fakeBookRepo struct {
@@ -156,7 +154,7 @@ func (r *fakeBookRepo) FindStockEventByEventID(ctx context.Context, eventID stri
 			return ev, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func (r *fakeBookRepo) FindStockEventByTransactionID(ctx context.Context, txnID string, eventType string) (*domain.BookStockEvent, error) {
@@ -165,7 +163,7 @@ func (r *fakeBookRepo) FindStockEventByTransactionID(ctx context.Context, txnID 
 			return ev, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func seedBook(repo *fakeBookRepo, isbn, title, author string, stock int) *domain.Book {
@@ -322,9 +320,12 @@ func TestStockDecreaseInsufficient(t *testing.T) {
 	book := seedBook(repo, "978-001", "Rare Book", "Author", 0)
 
 	uc := usecase.NewStockUsecase(repo)
-	_, err := uc.DecreaseStock(context.Background(), book.ID, 1, "txn-1")
-	if err == nil {
-		t.Fatal("expected error for insufficient stock")
+	event, err := uc.DecreaseStock(context.Background(), book.ID, 1, "txn-1")
+	if err != nil {
+		t.Fatalf("expected rejected stock event to be recorded, got: %v", err)
+	}
+	if event.Status != domain.StockEventFailed {
+		t.Fatalf("expected failed stock event, got %s", event.Status)
 	}
 }
 
@@ -355,13 +356,12 @@ func TestStockIncreaseExceedsTotal(t *testing.T) {
 	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
 
 	uc := usecase.NewStockUsecase(repo)
-	_, err := uc.IncreaseStock(context.Background(), book.ID, 1, "txn-1")
-	if err == nil {
-		t.Fatal("expected error when stock increase exceeds total")
+	event, err := uc.IncreaseStock(context.Background(), book.ID, 1, "txn-1")
+	if err != nil {
+		t.Fatalf("expected rejected stock event to be recorded, got: %v", err)
 	}
-	var appErr *apperror.Error
-	if !errors.As(err, &appErr) || appErr.Kind != apperror.KindConflict {
-		t.Fatalf("expected conflict app error, got %v", err)
+	if event.Status != domain.StockEventFailed {
+		t.Fatalf("expected failed stock event, got %s", event.Status)
 	}
 
 	updated, _ := repo.FindByID(context.Background(), book.ID)

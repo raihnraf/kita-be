@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"kita-be/internal/platform/rabbitmq"
@@ -31,28 +32,44 @@ func NewPublisher(rmq *rabbitmq.Publisher) *Publisher {
 }
 
 func (p *Publisher) PublishStockEvent(ctx context.Context, event domain.StockEventOutbox) error {
-	routingKey := rabbitmq.RoutingKeyDec
-	if event.EventType == "INCREASE" {
-		routingKey = rabbitmq.RoutingKeyInc
+	payload, err := stockEventPayloadFromOutbox(event)
+	if err != nil {
+		return err
 	}
-
-	payload := stockEventPayloadFromOutbox(event)
+	routingKey, err := rabbitmq.RoutingKeyForCommandEventType(payload.EventType)
+	if err != nil {
+		return err
+	}
 
 	return p.rmq.Publish(ctx, routingKey, payload)
 }
 
-func stockEventPayloadFromOutbox(event domain.StockEventOutbox) StockEventPayload {
+func stockEventPayloadFromOutbox(event domain.StockEventOutbox) (StockEventPayload, error) {
+	eventType, err := rabbitmq.CommandEventTypeForOperation(event.EventType)
+	if err != nil {
+		return StockEventPayload{}, err
+	}
+
+	var compensationForEventType *string
+	if event.CompensationForEventType != nil {
+		compensationEventType, err := rabbitmq.CommandEventTypeForOperation(*event.CompensationForEventType)
+		if err != nil {
+			return StockEventPayload{}, fmt.Errorf("invalid compensation event type: %w", err)
+		}
+		compensationForEventType = &compensationEventType
+	}
+
 	return StockEventPayload{
 		EventID:                  event.ID,
-		EventType:                event.EventType,
+		EventType:                eventType,
 		TransactionID:            event.TransactionID,
 		TransactionRef:           event.TransactionRef,
-		CompensationForEventType: event.CompensationForEventType,
+		CompensationForEventType: compensationForEventType,
 		CompensationReason:       event.CompensationReason,
 		UserID:                   event.UserID,
 		BookID:                   event.BookID,
 		Quantity:                 event.Quantity,
 		OccurredAt:               event.CreatedAt.UTC().Format(time.RFC3339),
 		IdempotencyKey:           event.ID,
-	}
+	}, nil
 }

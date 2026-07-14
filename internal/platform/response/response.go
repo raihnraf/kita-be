@@ -34,6 +34,10 @@ func Created(c *fiber.Ctx, data interface{}) error {
 	return Success(c, fiber.StatusCreated, data)
 }
 
+func Accepted(c *fiber.Ctx, data interface{}) error {
+	return Success(c, fiber.StatusAccepted, data)
+}
+
 func OK(c *fiber.Ctx, data interface{}) error {
 	return Success(c, fiber.StatusOK, data)
 }

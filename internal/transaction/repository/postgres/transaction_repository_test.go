@@ -33,7 +33,7 @@ func TestTransactionRepositoryConcurrencyAdvisoryLock(t *testing.T) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			txn := domain.NewBorrowTransaction(
+			txn := domain.NewPendingBorrowTransaction(
 				uuid.New().String(),
 				fmt.Sprintf("REF-%s-%d", userID[:8], workerID),
 				userID,
@@ -97,7 +97,7 @@ func TestTransactionRepositoryReturnIfActiveConcurrency(t *testing.T) {
 	userID := uuid.New().String()
 	bookID := uuid.New().String()
 	txnID := uuid.New().String()
-	ref := "REF-RETURN-CONC"
+	ref := fmt.Sprintf("REF-RETURN-CONC-%s", uuid.New().String()[:8])
 
 	txn := domain.NewBorrowTransaction(txnID, ref, userID, bookID, time.Now(), time.Now().AddDate(0, 0, 7))
 	if err := repo.Create(ctx, txn); err != nil {
@@ -188,7 +188,7 @@ func newTestPoolForTxn(t *testing.T) *pgxpool.Pool {
 			borrowed_at TIMESTAMP WITH TIME ZONE NOT NULL,
 			due_at TIMESTAMP WITH TIME ZONE NOT NULL,
 			returned_at TIMESTAMP WITH TIME ZONE,
-			status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+			status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETURNED', 'RETURNED_LATE', 'PENDING', 'RETURN_PENDING', 'CANCELLED')),
 			fine_amount_cents BIGINT NOT NULL DEFAULT 0,
 			late_days INT NOT NULL DEFAULT 0,
 			stock_event_id UUID,
@@ -206,7 +206,7 @@ func newTestPoolForTxn(t *testing.T) *pgxpool.Pool {
 			user_id UUID NOT NULL,
 			book_id UUID NOT NULL,
 			quantity INT NOT NULL DEFAULT 1,
-			status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+			status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'SKIPPED')),
 			attempts INT NOT NULL DEFAULT 0,
 			last_error TEXT,
 			next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),

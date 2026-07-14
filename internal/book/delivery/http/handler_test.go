@@ -255,7 +255,7 @@ func (r *handlerFakeBookRepo) FindStockEventByEventID(ctx context.Context, event
 			return event, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func (r *handlerFakeBookRepo) FindStockEventByTransactionID(ctx context.Context, txnID string, eventType string) (*domain.BookStockEvent, error) {
@@ -264,7 +264,7 @@ func (r *handlerFakeBookRepo) FindStockEventByTransactionID(ctx context.Context,
 			return event, nil
 		}
 	}
-	return nil, fmt.Errorf("event not found")
+	return nil, domain.ErrStockEventNotFound
 }
 
 func (r *handlerFakeBookRepo) seedBook(isbn, title, author string, stock int) *domain.Book {

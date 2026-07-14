@@ -19,7 +19,6 @@ type ReturnUsecase struct {
 	txnRepo         TransactionRepository
 	auditRepo       AuditRepository
 	idempotencyRepo IdempotencyRepository
-	bookClient      BookServiceClient
 	fineCalculator  *FineCalculator
 }
 
@@ -27,14 +26,12 @@ func NewReturnUsecase(
 	txnRepo TransactionRepository,
 	auditRepo AuditRepository,
 	idempotencyRepo IdempotencyRepository,
-	bookClient BookServiceClient,
 	fineCalculator *FineCalculator,
 ) *ReturnUsecase {
 	return &ReturnUsecase{
 		txnRepo:         txnRepo,
 		auditRepo:       auditRepo,
 		idempotencyRepo: idempotencyRepo,
-		bookClient:      bookClient,
 		fineCalculator:  fineCalculator,
 	}
 }
@@ -91,49 +88,32 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 	lateDays, fineAmountCents := uc.fineCalculator.Calculate(txn.DueAt, now)
 
 	if lateDays > 0 {
-		txn.Status = domain.TransactionReturnedLate
 		txn.LateDays = lateDays
 		txn.FineAmountCents = fineAmountCents
-	} else {
-		txn.Status = domain.TransactionReturned
 	}
+	finalStatus := domain.TransactionReturned
+	if lateDays > 0 {
+		finalStatus = domain.TransactionReturnedLate
+	}
+	txn.Status = domain.TransactionReturnPending
+	txn.StockEventID = nil
 
 	txn.UpdatedAt = now
 
-	// Commit the return atomically first: conditional UPDATE + outbox in one DB
-	// transaction. The WHERE status='ACTIVE' guard is the single authoritative lock —
-	// only one concurrent return call can ever succeed this step. No stock has been
-	// touched yet at this point, so no compensation is possible or needed on failure.
 	outbox := domain.NewStockEventOutbox(uuid.New().String(), "INCREASE", txn)
-	if err := uc.txnRepo.ReturnIfActiveWithOutbox(ctx, txn, outbox); err != nil {
+	if err := uc.txnRepo.StartReturnWithOutbox(ctx, txn, outbox); err != nil {
 		if errors.Is(err, domain.ErrTransactionNotActive) {
 			return nil, apperror.Conflict("transaction is not active")
 		}
-		return nil, fmt.Errorf("failed to update transaction: %w", err)
-	}
-
-	// DB committed. Attempt the immediate stock increase as a fast path for
-	// low-latency consistency. The outbox row committed above is the durable
-	// fallback — if this HTTP call fails or the process dies here, the outbox
-	// dispatcher will retry until the stock is restored.
-	stockEventID, err := uc.bookClient.IncreaseStock(ctx, txn.BookID, 1, txn.ID)
-	if err != nil {
-		logger.Warn("immediate stock increase failed; outbox dispatcher will retry",
-			"book_id", txn.BookID, "transaction_id", txn.ID, "error", err.Error())
-	} else {
-		txn.StockEventID = &stockEventID
-		if updateErr := uc.txnRepo.UpdateStockEventID(ctx, txn.ID, stockEventID); updateErr != nil {
-			logger.Warn("failed to persist stock_event_id",
-				"transaction_id", txn.ID, "error", updateErr.Error())
-		}
+		return nil, fmt.Errorf("failed to start return transaction: %w", err)
 	}
 
 	audit := &domain.TransactionAudit{
 		ID:            uuid.New().String(),
 		TransactionID: txn.ID,
 		FromStatus:    &fromStatus,
-		ToStatus:      string(txn.Status),
-		Reason:        "Book returned",
+		ToStatus:      string(domain.TransactionReturnPending),
+		Reason:        fmt.Sprintf("Return requested; waiting for stock restore before %s", finalStatus),
 		CreatedAt:     now,
 	}
 	if err := uc.auditRepo.Create(ctx, audit); err != nil {

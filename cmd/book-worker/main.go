@@ -40,7 +40,8 @@ func main() {
 	}
 	defer rmqConn.Close()
 
-	consumer := rabbitmq.NewConsumer(rmqConn, rabbitmq.QueueName)
+	rmqPublisher := rabbitmq.NewPublisher(rmqConn)
+	consumer := rabbitmq.NewConsumer(rmqConn, rabbitmq.CommandQueueName)
 	if err := consumer.Setup(); err != nil {
 		logger.Error("failed to setup consumer topology", "error", err.Error())
 		os.Exit(1)
@@ -48,7 +49,8 @@ func main() {
 
 	bookRepo := bookrepo.NewBookRepository(db)
 	stockUC := usecase.NewStockUsecase(bookRepo)
-	handler := bookmsg.NewHandler(stockUC)
+	resultPublisher := bookmsg.NewPublisher(rmqPublisher)
+	handler := bookmsg.NewHandler(stockUC, resultPublisher)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -57,7 +59,7 @@ func main() {
 
 	// ConsumeWithReconnect blocks; runs reconnect loop internally on broker disconnect.
 	go func() {
-		logger.Info("book worker running", "queue", rabbitmq.QueueName)
+		logger.Info("book worker running", "queue", rabbitmq.CommandQueueName)
 		consumer.ConsumeWithReconnect(ctx, handler.HandleStockEvent)
 		logger.Info("consumer stopped")
 		// If the consumer exits on its own (exhausted reconnect attempts), signal shutdown.

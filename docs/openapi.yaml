@@ -316,6 +316,11 @@ paths:
     post:
       tags: [Transactions]
       summary: Borrow a book
+      description: |
+        Creates a borrow intent. The response returns immediately with status `PENDING`.
+        The actual stock mutation happens asynchronously via RabbitMQ; poll
+        `GET /api/v1/transactions/{id}` to wait for the final `ACTIVE` or `CANCELLED`
+        state.
       security:
         - bearerAuth: []
       requestBody:
@@ -325,8 +330,8 @@ paths:
             schema:
               $ref: '#/components/schemas/BorrowRequest'
       responses:
-        '201':
-          description: Borrow transaction created
+        '202':
+          description: Borrow transaction accepted (async processing started)
           content:
             application/json:
               schema:
@@ -336,6 +341,16 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Transaction'
+              example:
+                success: true
+                data:
+                  id: 550e8400-e29b-41d4-a716-446655440000
+                  transaction_ref: BOR-20260101-0001
+                  user_id: 550e8400-e29b-41d4-a716-446655440001
+                  book_id: 550e8400-e29b-41d4-a716-446655440002
+                  status: PENDING
+                  borrowed_at: '2026-01-01T10:00:00Z'
+                  due_at: '2026-01-08T10:00:00Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -346,6 +361,12 @@ paths:
     post:
       tags: [Transactions]
       summary: Return a borrowed book
+      description: |
+        Creates a return intent. The response returns immediately with status
+        `RETURN_PENDING`. The stock restore happens asynchronously via RabbitMQ;
+        poll `GET /api/v1/transactions/{id}` to wait for the final `RETURNED`,
+        `RETURNED_LATE`, or reverted `ACTIVE` state when the stock restore is
+        rejected.
       security:
         - bearerAuth: []
       parameters:
@@ -357,8 +378,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ReturnRequest'
       responses:
-        '200':
-          description: Borrow transaction returned
+        '202':
+          description: Return transaction accepted (async processing started)
           content:
             application/json:
               schema:
@@ -368,6 +389,16 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Transaction'
+              example:
+                success: true
+                data:
+                  id: 550e8400-e29b-41d4-a716-446655440000
+                  transaction_ref: BOR-20260101-0001
+                  user_id: 550e8400-e29b-41d4-a716-446655440001
+                  book_id: 550e8400-e29b-41d4-a716-446655440002
+                  status: RETURN_PENDING
+                  borrowed_at: '2026-01-01T10:00:00Z'
+                  due_at: '2026-01-08T10:00:00Z'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '400':
@@ -897,7 +928,12 @@ components:
           nullable: true
         status:
           type: string
-          enum: [ACTIVE, RETURNED, RETURNED_LATE]
+          enum: [PENDING, ACTIVE, RETURN_PENDING, RETURNED, RETURNED_LATE, CANCELLED]
+          description: |
+             Transaction lifecycle state. Borrow starts as `PENDING` and becomes `ACTIVE`
+             (or `CANCELLED`) after the async stock command is processed. Return starts as
+             `RETURN_PENDING` and becomes `RETURNED` or `RETURNED_LATE` after the async
+             stock restore is processed, or reverts to `ACTIVE` if the restore is rejected.
         fine_amount_cents:
           type: integer
           format: int64

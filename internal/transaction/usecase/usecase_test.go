@@ -13,10 +13,12 @@ import (
 )
 
 type fakeTxnRepo struct {
-	txns            map[string]*domain.BorrowTransaction
-	outbox          map[string]*domain.StockEventOutbox
-	createBorrowErr error
-	returnActiveErr error
+	txns               map[string]*domain.BorrowTransaction
+	outbox             map[string]*domain.StockEventOutbox
+	createBorrowErr    error
+	activateBorrowErr  error
+	reconcileCancelErr error
+	returnActiveErr    error
 }
 
 func newFakeTxnRepo() *fakeTxnRepo {
@@ -93,6 +95,10 @@ func (r *fakeTxnRepo) ReturnIfActive(ctx context.Context, tx *domain.BorrowTrans
 }
 
 func (r *fakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
+	return r.StartReturnWithOutbox(ctx, tx, outbox)
+}
+
+func (r *fakeTxnRepo) StartReturnWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
 	if r.returnActiveErr != nil {
 		return r.returnActiveErr
 	}
@@ -100,17 +106,55 @@ func (r *fakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.B
 	if !ok || existing.UserID != tx.UserID || existing.Status != domain.TransactionActive {
 		return domain.ErrTransactionNotActive
 	}
-	r.txns[tx.ID] = tx
+	existing.ReturnedAt = tx.ReturnedAt
+	existing.FineAmountCents = tx.FineAmountCents
+	existing.LateDays = tx.LateDays
+	existing.Status = domain.TransactionReturnPending
+	existing.StockEventID = nil
+	existing.UpdatedAt = tx.UpdatedAt
 	if outbox != nil {
 		r.outbox[outbox.ID] = outbox
 	}
 	return nil
 }
 
+func (r *fakeTxnRepo) FinalizeReturn(ctx context.Context, id, stockEventID string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionReturnPending {
+		return domain.ErrTransactionNotPending
+	}
+	if tx.LateDays > 0 {
+		tx.Status = domain.TransactionReturnedLate
+	} else {
+		tx.Status = domain.TransactionReturned
+	}
+	tx.StockEventID = &stockEventID
+	return nil
+}
+
+func (r *fakeTxnRepo) RejectReturn(ctx context.Context, id string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionReturnPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionActive
+	tx.ReturnedAt = nil
+	tx.FineAmountCents = 0
+	tx.LateDays = 0
+	tx.StockEventID = nil
+	return nil
+}
+
 func (r *fakeTxnRepo) FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {
 	var result []domain.BorrowTransaction
 	for _, tx := range r.txns {
-		if tx.UserID == userID && tx.Status == domain.TransactionActive {
+		if tx.UserID == userID && (tx.Status == domain.TransactionActive || tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) {
 			result = append(result, *tx)
 		}
 	}
@@ -120,7 +164,7 @@ func (r *fakeTxnRepo) FindActiveByUser(ctx context.Context, userID string) ([]do
 func (r *fakeTxnRepo) CountActiveByUser(ctx context.Context, userID string) (int, error) {
 	count := 0
 	for _, tx := range r.txns {
-		if tx.UserID == userID && tx.Status == domain.TransactionActive {
+		if tx.UserID == userID && (tx.Status == domain.TransactionActive || tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) {
 			count++
 		}
 	}
@@ -161,6 +205,88 @@ func (r *fakeTxnRepo) ListAll(ctx context.Context, page, perPage int) ([]domain.
 		end = len(result)
 	}
 	return result[start:end], total, nil
+}
+
+func (r *fakeTxnRepo) ActivateBorrow(ctx context.Context, id, stockEventID string) error {
+	if r.activateBorrowErr != nil {
+		return r.activateBorrowErr
+	}
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionActive
+	tx.StockEventID = &stockEventID
+	return nil
+}
+
+func (r *fakeTxnRepo) CancelBorrow(ctx context.Context, id string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionCancelled
+	return nil
+}
+
+func (r *fakeTxnRepo) SkipOutboxByTransactionID(ctx context.Context, transactionID string) error {
+	for _, event := range r.outbox {
+		if event.TransactionID == transactionID && (event.Status == domain.StockEventOutboxPending || event.Status == domain.StockEventOutboxFailed) {
+			event.Status = domain.StockEventOutboxSkipped
+		}
+	}
+	return nil
+}
+
+func (r *fakeTxnRepo) FindPendingOlderThan(ctx context.Context, threshold time.Time) ([]domain.BorrowTransaction, error) {
+	var result []domain.BorrowTransaction
+	for _, tx := range r.txns {
+		if (tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) && tx.CreatedAt.Before(threshold) {
+			result = append(result, *tx)
+		}
+	}
+	return result, nil
+}
+
+func (r *fakeTxnRepo) ReconcileCancelBorrow(ctx context.Context, id string, outbox *domain.StockEventOutbox) error {
+	if r.reconcileCancelErr != nil {
+		return r.reconcileCancelErr
+	}
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionCancelled
+
+	for _, event := range r.outbox {
+		if event.TransactionID == id && event.EventType == "DECREASE" && (event.Status == domain.StockEventOutboxPending || event.Status == domain.StockEventOutboxFailed) {
+			event.Status = domain.StockEventOutboxSkipped
+		}
+	}
+
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
+	return nil
+}
+
+func (r *fakeTxnRepo) RequeueStockCommand(ctx context.Context, transactionID, eventType string) error {
+	for _, event := range r.outbox {
+		if event.TransactionID == transactionID && event.EventType == eventType {
+			event.Status = domain.StockEventOutboxPending
+			return nil
+		}
+	}
+	return fmt.Errorf("not found")
 }
 
 type fakeAuditRepo struct {
@@ -249,10 +375,13 @@ func (c *fakeBookClient) DecreaseStock(ctx context.Context, bookID string, qty i
 }
 
 func (c *fakeBookClient) GetBook(ctx context.Context, bookID string) (*domain.BookSnapshot, error) {
+	available := c.stock[bookID]
 	return &domain.BookSnapshot{
-		ISBN:   "isbn-" + bookID,
-		Title:  "Book " + bookID,
-		Author: "Author",
+		ISBN:           "isbn-" + bookID,
+		Title:          "Book " + bookID,
+		Author:         "Author",
+		AvailableStock: available,
+		CanBorrow:      available > 0,
 	}, nil
 }
 
@@ -285,8 +414,8 @@ func TestBorrowSuccess(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if output.Transaction.Status != domain.TransactionActive {
-		t.Errorf("expected status ACTIVE, got %s", output.Transaction.Status)
+	if output.Transaction.Status != domain.TransactionPending {
+		t.Errorf("expected status PENDING, got %s", output.Transaction.Status)
 	}
 	if output.Transaction.UserID != "user-1" {
 		t.Errorf("expected user_id user-1, got %s", output.Transaction.UserID)
@@ -454,65 +583,105 @@ func TestBorrowEnqueuesStockDecreaseOutbox(t *testing.T) {
 	}
 }
 
-func TestBorrowCompensatesStockWhenCreateFails(t *testing.T) {
+func TestBorrowDoesNotCallStockMutationSynchronously(t *testing.T) {
 	txnRepo := newFakeTxnRepo()
-	txnRepo.createBorrowErr = domain.ErrActiveBorrowLimitReached
 	auditRepo := newFakeAuditRepo()
 	idempRepo := newFakeIdempotencyRepo()
 	bookClient := newFakeBookClient()
 	bookClient.setStock("book-1", 1)
+	bookClient.failDecrease = true
 
 	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
 
-	_, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
-	if err == nil {
-		t.Fatal("expected borrow to fail")
+	output, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed without synchronous stock mutation, got: %v", err)
 	}
-	if bookClient.stock["book-1"] != 1 {
-		t.Fatalf("expected stock to be restored after compensation, got %d", bookClient.stock["book-1"])
+
+	var tx *domain.BorrowTransaction
+	for _, t := range txnRepo.txns {
+		if t.UserID == "user-1" && t.BookID == "book-1" {
+			tx = t
+			break
+		}
 	}
-	if len(txnRepo.txns) != 0 {
-		t.Fatalf("expected no transaction to be persisted, got %d", len(txnRepo.txns))
+	if tx == nil {
+		t.Fatal("expected transaction to be created in PENDING state")
 	}
-	if len(txnRepo.outbox) != 0 {
-		t.Fatalf("expected no fallback outbox event when immediate compensation succeeds, got %d", len(txnRepo.outbox))
+	if tx.Status != domain.TransactionPending {
+		t.Fatalf("expected status PENDING, got %s", tx.Status)
+	}
+	if output.Transaction.ID != tx.ID {
+		t.Fatalf("expected response transaction id %s, got %s", tx.ID, output.Transaction.ID)
 	}
 }
 
-func TestBorrowEnqueuesCompensationOutboxWhenImmediateCompensationFails(t *testing.T) {
+func TestBorrowResponseStaysPendingUntilAsyncResultArrives(t *testing.T) {
 	txnRepo := newFakeTxnRepo()
-	txnRepo.createBorrowErr = domain.ErrActiveBorrowLimitReached
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+
+	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+
+	output, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if output.Transaction.Status != domain.TransactionPending {
+		t.Errorf("expected status PENDING, got %s", output.Transaction.Status)
+	}
+	if output.Transaction.StockEventID != nil {
+		t.Fatal("expected stock_event_id to be unset before async result")
+	}
+}
+
+func TestBorrowRequestDoesNotDependOnActivationDuringRequest(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	txnRepo.activateBorrowErr = domain.ErrTransactionNotPending
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+
+	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+
+	output, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed without synchronous activation, got: %v", err)
+	}
+
+	active, countErr := txnRepo.CountActiveByUser(context.Background(), "user-1")
+	if countErr != nil {
+		t.Fatalf("failed to count active borrows: %v", countErr)
+	}
+	if active != 1 {
+		t.Fatalf("expected pending borrow to remain counted for reconciliation, got %d", active)
+	}
+	if output.Transaction.Status != domain.TransactionPending {
+		t.Fatalf("expected response status PENDING, got %s", output.Transaction.Status)
+	}
+}
+
+func TestBorrowRequestDoesNotDependOnCleanupDuringRequest(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	txnRepo.reconcileCancelErr = fmt.Errorf("database unavailable")
 	auditRepo := newFakeAuditRepo()
 	idempRepo := newFakeIdempotencyRepo()
 	bookClient := newFakeBookClient()
 	bookClient.setStock("book-1", 1)
-	bookClient.failIncrease = true
+	bookClient.failDecrease = true
 
 	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
 
-	_, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
-	if err == nil {
-		t.Fatal("expected borrow to fail")
+	output, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed without synchronous cleanup path, got: %v", err)
 	}
-	if bookClient.stock["book-1"] != 0 {
-		t.Fatalf("expected stock to remain decremented until fallback compensation runs, got %d", bookClient.stock["book-1"])
-	}
-	if len(txnRepo.outbox) != 1 {
-		t.Fatalf("expected 1 fallback compensation outbox event, got %d", len(txnRepo.outbox))
-	}
-	for _, event := range txnRepo.outbox {
-		if event.EventType != "INCREASE" || event.BookID != "book-1" {
-			t.Fatalf("unexpected compensation event: %+v", event)
-		}
-		if event.TransactionID == "" || event.TransactionRef == "" {
-			t.Fatalf("expected compensation event to retain original transaction linkage, got %+v", event)
-		}
-		if event.CompensationForEventType == nil || *event.CompensationForEventType != "DECREASE" {
-			t.Fatalf("expected compensation_for_event_type=DECREASE, got %+v", event)
-		}
-		if event.CompensationReason == nil || *event.CompensationReason != "borrow_create_failed" {
-			t.Fatalf("expected compensation_reason=borrow_create_failed, got %+v", event)
-		}
+	if output.Transaction.Status != domain.TransactionPending {
+		t.Fatalf("expected status PENDING, got %s", output.Transaction.Status)
 	}
 }
 
@@ -528,14 +697,14 @@ func TestReturnSuccess(t *testing.T) {
 		UserID: "user-1",
 		BookID: "book-1",
 	})
-	if bookClient.stock["book-1"] != 2 {
-		t.Fatalf("expected stock to decrease to 2 after borrow, got %d", bookClient.stock["book-1"])
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return scenario: %v", err)
 	}
 
 	time.Sleep(1 * time.Millisecond)
 
 	fineCalc := usecase.NewFineCalculator(50000)
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, fineCalc)
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, fineCalc)
 
 	output, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID: borrowOutput.Transaction.ID,
@@ -545,18 +714,18 @@ func TestReturnSuccess(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if output.Transaction.Status != domain.TransactionReturned {
-		t.Errorf("expected status RETURNED, got %s", output.Transaction.Status)
+	if output.Transaction.Status != domain.TransactionReturnPending {
+		t.Errorf("expected status RETURN_PENDING, got %s", output.Transaction.Status)
 	}
 	if bookClient.stock["book-1"] != 3 {
-		t.Errorf("expected stock to be restored to 3 after return, got %d", bookClient.stock["book-1"])
+		t.Errorf("expected stock to remain unchanged until async return finalization, got %d", bookClient.stock["book-1"])
 	}
 	active, err := txnRepo.CountActiveByUser(context.Background(), "user-1")
 	if err != nil {
 		t.Fatalf("failed to count active loans: %v", err)
 	}
-	if active != 0 {
-		t.Errorf("expected 0 active loans after return, got %d", active)
+	if active != 1 {
+		t.Errorf("expected return-pending loan to still count as active, got %d", active)
 	}
 }
 
@@ -572,6 +741,9 @@ func TestReturnLateCreatesFine(t *testing.T) {
 		UserID: "user-1",
 		BookID: "book-1",
 	})
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return scenario: %v", err)
+	}
 
 	txn, _ := txnRepo.FindByID(context.Background(), borrowOutput.Transaction.ID)
 	pastDue := time.Now().AddDate(0, 0, -10)
@@ -580,7 +752,7 @@ func TestReturnLateCreatesFine(t *testing.T) {
 	_ = txnRepo.Update(context.Background(), txn)
 
 	fineCalc := usecase.NewFineCalculator(50000)
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, fineCalc)
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, fineCalc)
 
 	output, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID: borrowOutput.Transaction.ID,
@@ -590,8 +762,8 @@ func TestReturnLateCreatesFine(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if output.Transaction.Status != domain.TransactionReturnedLate {
-		t.Errorf("expected status RETURNED_LATE, got %s", output.Transaction.Status)
+	if output.Transaction.Status != domain.TransactionReturnPending {
+		t.Errorf("expected status RETURN_PENDING, got %s", output.Transaction.Status)
 	}
 	if output.Transaction.LateDays <= 0 {
 		t.Errorf("expected late_days > 0, got %d", output.Transaction.LateDays)
@@ -616,8 +788,11 @@ func TestReturnIdempotencyReplaysCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected borrow to succeed, got: %v", err)
 	}
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return scenario: %v", err)
+	}
 
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, usecase.NewFineCalculator(50000))
 	out1, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID:  borrowOutput.Transaction.ID,
 		UserID:         "user-1",
@@ -639,7 +814,7 @@ func TestReturnIdempotencyReplaysCompleted(t *testing.T) {
 		t.Fatalf("expected replayed transaction ID %s, got %s", out1.Transaction.ID, out2.Transaction.ID)
 	}
 	if bookClient.stock["book-1"] != 3 {
-		t.Fatalf("expected stock restored exactly once to 3, got %d", bookClient.stock["book-1"])
+		t.Fatalf("expected stock to remain unchanged until async return result arrives, got %d", bookClient.stock["book-1"])
 	}
 }
 
@@ -660,8 +835,11 @@ func TestReturnIdempotencyDifferentTransactionRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected second borrow to succeed, got: %v", err)
 	}
+	if err := txnRepo.ActivateBorrow(context.Background(), borrow1.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate first borrow for return scenario: %v", err)
+	}
 
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, usecase.NewFineCalculator(50000))
 	if _, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID:  borrow1.Transaction.ID,
 		UserID:         "user-1",
@@ -692,8 +870,11 @@ func TestReturnEnqueuesStockIncreaseOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected borrow to succeed, got: %v", err)
 	}
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return scenario: %v", err)
+	}
 
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, usecase.NewFineCalculator(50000))
 	if _, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID:  borrowOutput.Transaction.ID,
 		UserID:         "user-1",
@@ -724,7 +905,7 @@ func TestReturnDoesNotTouchStockWhenUpdateFails(t *testing.T) {
 	txn := domain.NewBorrowTransaction(uuid.NewString(), "TXN-1", "user-1", "book-1", time.Now().AddDate(0, 0, -1), time.Now().AddDate(0, 0, 6))
 	txnRepo.txns[txn.ID] = txn
 
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, usecase.NewFineCalculator(50000))
 	_, err := returnUC.Execute(context.Background(), usecase.ReturnInput{TransactionID: txn.ID, UserID: "user-1"})
 	if err == nil {
 		t.Fatal("expected return to fail with inactive conflict")
@@ -737,32 +918,29 @@ func TestReturnDoesNotTouchStockWhenUpdateFails(t *testing.T) {
 	}
 }
 
-func TestReturnLeavesCommittedOutboxForRetryWhenImmediateIncreaseFails(t *testing.T) {
+func TestReturnLeavesCommittedOutboxForAsyncRestore(t *testing.T) {
 	txnRepo := newFakeTxnRepo()
 	auditRepo := newFakeAuditRepo()
 	idempRepo := newFakeIdempotencyRepo()
 	bookClient := newFakeBookClient()
 	bookClient.setStock("book-1", 3)
-	bookClient.failIncrease = true
 
 	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
 	borrowOutput, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
 	if err != nil {
 		t.Fatalf("expected borrow to succeed, got: %v", err)
 	}
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return scenario: %v", err)
+	}
 
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, usecase.NewFineCalculator(50000))
 	output, err := returnUC.Execute(context.Background(), usecase.ReturnInput{TransactionID: borrowOutput.Transaction.ID, UserID: "user-1"})
-	if err == nil {
-		if output == nil {
-			t.Fatal("expected return output when immediate stock increase fails")
-		}
-	}
 	if err != nil {
-		t.Fatalf("expected return to succeed and rely on outbox retry, got: %v", err)
+		t.Fatalf("expected return to succeed and rely on async result flow, got: %v", err)
 	}
-	if bookClient.stock["book-1"] != 2 {
-		t.Fatalf("expected stock to remain at borrowed level until outbox retry runs, got %d", bookClient.stock["book-1"])
+	if bookClient.stock["book-1"] != 3 {
+		t.Fatalf("expected stock to remain unchanged until async result runs, got %d", bookClient.stock["book-1"])
 	}
 	var sawIncrease bool
 	for _, event := range txnRepo.outbox {
@@ -776,11 +954,8 @@ func TestReturnLeavesCommittedOutboxForRetryWhenImmediateIncreaseFails(t *testin
 	if !sawIncrease {
 		t.Fatalf("expected committed return outbox event for retry, got %+v", txnRepo.outbox)
 	}
-	if borrowOutput.Transaction.StockEventID == nil {
-		t.Fatal("expected borrow output to carry original stock_event_id")
-	}
-	if output.Transaction.StockEventID == nil || *output.Transaction.StockEventID != *borrowOutput.Transaction.StockEventID {
-		t.Fatalf("expected stock_event_id to remain at the original borrow event until retry succeeds, got %+v", output.Transaction.StockEventID)
+	if output.Transaction.StockEventID != nil {
+		t.Fatalf("expected return request not to set stock_event_id before async result, got %+v", output.Transaction.StockEventID)
 	}
 }
 
@@ -796,9 +971,12 @@ func TestReturnWrongUser(t *testing.T) {
 		UserID: "user-1",
 		BookID: "book-1",
 	})
+	if err := txnRepo.ActivateBorrow(context.Background(), borrowOutput.Transaction.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for ownership check: %v", err)
+	}
 
 	fineCalc := usecase.NewFineCalculator(50000)
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, fineCalc)
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, fineCalc)
 
 	_, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
 		TransactionID: borrowOutput.Transaction.ID,

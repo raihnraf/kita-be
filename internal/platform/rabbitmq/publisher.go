@@ -11,6 +11,56 @@ import (
 	"kita-be/internal/platform/logger"
 )
 
+type queueBinding struct {
+	queueName string
+	dlqName   string
+	bindings  []string
+}
+
+func topologyBindings() []queueBinding {
+	return []queueBinding{
+		{
+			queueName: CommandQueueName,
+			dlqName:   CommandDLQName,
+			bindings:  []string{RoutingKeyDec, RoutingKeyInc},
+		},
+		{
+			queueName: ResultQueueName,
+			dlqName:   ResultDLQName,
+			bindings:  []string{RoutingKeyDecResult, RoutingKeyIncResult},
+		},
+	}
+}
+
+func declareTopology(ch *amqp.Channel) error {
+	if err := ch.ExchangeDeclare(
+		ExchangeName, ExchangeType,
+		true, false, false, false, nil,
+	); err != nil {
+		return fmt.Errorf("failed to declare exchange: %w", err)
+	}
+
+	for _, topology := range topologyBindings() {
+		queueArgs := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": topology.dlqName,
+		}
+		if _, err := ch.QueueDeclare(topology.queueName, true, false, false, false, queueArgs); err != nil {
+			return fmt.Errorf("failed to declare queue %s: %w", topology.queueName, err)
+		}
+		for _, routingKey := range topology.bindings {
+			if err := ch.QueueBind(topology.queueName, routingKey, ExchangeName, false, nil); err != nil {
+				return fmt.Errorf("failed to bind queue %s (routing_key=%s): %w", topology.queueName, routingKey, err)
+			}
+		}
+		if _, err := ch.QueueDeclare(topology.dlqName, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("failed to declare dlq %s: %w", topology.dlqName, err)
+		}
+	}
+
+	return nil
+}
+
 type Publisher struct {
 	conn *Connection
 }
@@ -32,32 +82,7 @@ func (p *Publisher) Setup() error {
 	}
 	defer func() { _ = ch.Close() }()
 
-	if err := ch.ExchangeDeclare(
-		ExchangeName, ExchangeType,
-		true, false, false, false, nil,
-	); err != nil {
-		return fmt.Errorf("failed to declare exchange: %w", err)
-	}
-
-	queueArgs := amqp.Table{
-		"x-dead-letter-exchange":    "",
-		"x-dead-letter-routing-key": DLQName,
-	}
-	if _, err := ch.QueueDeclare(QueueName, true, false, false, false, queueArgs); err != nil {
-		return fmt.Errorf("failed to declare queue %s: %w", QueueName, err)
-	}
-
-	for _, rk := range []string{RoutingKeyDec, RoutingKeyInc} {
-		if err := ch.QueueBind(QueueName, rk, ExchangeName, false, nil); err != nil {
-			return fmt.Errorf("failed to bind queue (routing_key=%s): %w", rk, err)
-		}
-	}
-
-	if _, err := ch.QueueDeclare(DLQName, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("failed to declare dlq %s: %w", DLQName, err)
-	}
-
-	return nil
+	return declareTopology(ch)
 }
 
 // Publish sends a message to the exchange using publisher confirms.

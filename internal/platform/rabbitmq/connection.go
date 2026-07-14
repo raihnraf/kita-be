@@ -10,12 +10,20 @@ import (
 )
 
 const (
-	ExchangeName  = "library.events"
-	ExchangeType  = "topic"
-	QueueName     = "book.stock.mutation"
-	DLQName       = "book.stock.mutation.dlq"
-	RoutingKeyDec = "stock.decrease.requested"
-	RoutingKeyInc = "stock.increase.requested"
+	ExchangeName        = "library.events"
+	ExchangeType        = "topic"
+	CommandQueueName    = "book.stock.commands"
+	CommandDLQName      = "book.stock.commands.dlq"
+	ResultQueueName     = "transaction.stock.results"
+	ResultDLQName       = "transaction.stock.results.dlq"
+	QueueName           = CommandQueueName
+	DLQName             = CommandDLQName
+	RoutingKeyDec       = "stock.decrease.requested"
+	RoutingKeyInc       = "stock.increase.requested"
+	RoutingKeyDecResult = "stock.decrease.result"
+	RoutingKeyIncResult = "stock.increase.result"
+	ResultSucceeded     = "SUCCEEDED"
+	ResultRejected      = "REJECTED"
 )
 
 // Connection wraps an AMQP connection with reconnect capability.

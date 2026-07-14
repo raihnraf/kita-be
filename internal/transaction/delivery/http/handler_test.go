@@ -63,8 +63,8 @@ func TestTransactionHandlerBorrowSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if resp.StatusCode != fiber.StatusCreated {
-		t.Fatalf("expected status %d, got %d", fiber.StatusCreated, resp.StatusCode)
+	if resp.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", fiber.StatusAccepted, resp.StatusCode)
 	}
 
 	var body struct {
@@ -78,11 +78,11 @@ func TestTransactionHandlerBorrowSuccess(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !body.Success || body.Data.UserID != testUserID || body.Data.BookID != testBookID || body.Data.Status != string(domain.TransactionActive) {
+	if !body.Success || body.Data.UserID != testUserID || body.Data.BookID != testBookID || body.Data.Status != string(domain.TransactionPending) {
 		t.Fatalf("unexpected response body: %+v", body)
 	}
-	if got := deps.bookClient.stock[testBookID]; got != 1 {
-		t.Fatalf("expected stock 1 after borrow, got %d", got)
+	if got := deps.bookClient.stock[testBookID]; got != 2 {
+		t.Fatalf("expected stock unchanged before async borrow processing, got %d", got)
 	}
 }
 
@@ -97,8 +97,8 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no borrow error, got %v", err)
 	}
-	if borrowResp.StatusCode != fiber.StatusCreated {
-		t.Fatalf("expected borrow status %d, got %d", fiber.StatusCreated, borrowResp.StatusCode)
+	if borrowResp.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("expected borrow status %d, got %d", fiber.StatusAccepted, borrowResp.StatusCode)
 	}
 
 	var borrowBody struct {
@@ -112,8 +112,11 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 	if borrowBody.Data.ID == "" {
 		t.Fatal("expected transaction id")
 	}
-	if got := deps.bookClient.stock[testBookID]; got != 1 {
-		t.Fatalf("expected stock 1 after borrow, got %d", got)
+	if got := deps.bookClient.stock[testBookID]; got != 2 {
+		t.Fatalf("expected stock unchanged before async borrow processing, got %d", got)
+	}
+	if err := deps.txnRepo.ActivateBorrow(context.Background(), borrowBody.Data.ID, "stock-evt-1"); err != nil {
+		t.Fatalf("failed to activate borrow for return flow: %v", err)
 	}
 
 	returnReq := httptest.NewRequest(fiber.MethodPost, "/transactions/"+borrowBody.Data.ID+"/return", strings.NewReader(`{"idempotency_key":"return-1"}`))
@@ -122,8 +125,8 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no return error, got %v", err)
 	}
-	if returnResp.StatusCode != fiber.StatusOK {
-		t.Fatalf("expected return status %d, got %d", fiber.StatusOK, returnResp.StatusCode)
+	if returnResp.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("expected return status %d, got %d", fiber.StatusAccepted, returnResp.StatusCode)
 	}
 
 	var returnBody struct {
@@ -136,11 +139,11 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 	if err := json.NewDecoder(returnResp.Body).Decode(&returnBody); err != nil {
 		t.Fatalf("failed to decode return response: %v", err)
 	}
-	if !returnBody.Success || returnBody.Data.ID != borrowBody.Data.ID || returnBody.Data.Status != string(domain.TransactionReturned) {
+	if !returnBody.Success || returnBody.Data.ID != borrowBody.Data.ID || returnBody.Data.Status != string(domain.TransactionReturnPending) {
 		t.Fatalf("unexpected return response: %+v", returnBody)
 	}
 	if got := deps.bookClient.stock[testBookID]; got != 2 {
-		t.Fatalf("expected stock restored to 2, got %d", got)
+		t.Fatalf("expected stock unchanged before async return processing, got %d", got)
 	}
 }
 
@@ -172,8 +175,8 @@ func TestTransactionHandlerReturnReplaysCompletedIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no first return error, got %v", err)
 	}
-	if returnResp1.StatusCode != fiber.StatusOK {
-		t.Fatalf("expected first return status %d, got %d", fiber.StatusOK, returnResp1.StatusCode)
+	if returnResp1.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("expected first return status %d, got %d", fiber.StatusAccepted, returnResp1.StatusCode)
 	}
 
 	returnReq2 := httptest.NewRequest(fiber.MethodPost, "/transactions/"+txn.ID+"/return", strings.NewReader(body))
@@ -182,11 +185,11 @@ func TestTransactionHandlerReturnReplaysCompletedIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no replay return error, got %v", err)
 	}
-	if returnResp2.StatusCode != fiber.StatusOK {
-		t.Fatalf("expected replay return status %d, got %d", fiber.StatusOK, returnResp2.StatusCode)
+	if returnResp2.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("expected replay return status %d, got %d", fiber.StatusAccepted, returnResp2.StatusCode)
 	}
-	if got := deps.bookClient.stock[testBookID]; got != 2 {
-		t.Fatalf("expected stock increased exactly once, got %d", got)
+	if got := deps.bookClient.stock[testBookID]; got != 1 {
+		t.Fatalf("expected stock to remain unchanged until async return processing, got %d", got)
 	}
 }
 
@@ -243,7 +246,7 @@ func newTransactionTestApp(userID string) (*fiber.App, *transactionTestDeps) {
 		bookClient: newHandlerFakeBookClient(),
 	}
 	borrowUC := usecase.NewBorrowUsecase(deps.txnRepo, deps.auditRepo, deps.idempRepo, deps.bookClient, 3, 7)
-	returnUC := usecase.NewReturnUsecase(deps.txnRepo, deps.auditRepo, deps.idempRepo, deps.bookClient, usecase.NewFineCalculator(500))
+	returnUC := usecase.NewReturnUsecase(deps.txnRepo, deps.auditRepo, deps.idempRepo, usecase.NewFineCalculator(500))
 	historyUC := usecase.NewHistoryUsecase(deps.txnRepo, deps.auditRepo)
 	handler := transactionhttp.NewTransactionHandler(borrowUC, returnUC, historyUC)
 
@@ -336,21 +339,63 @@ func (r *handlerFakeTxnRepo) ReturnIfActive(ctx context.Context, tx *domain.Borr
 }
 
 func (r *handlerFakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
+	return r.StartReturnWithOutbox(ctx, tx, outbox)
+}
+
+func (r *handlerFakeTxnRepo) StartReturnWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
 	existing, ok := r.txns[tx.ID]
 	if !ok || existing.UserID != tx.UserID || existing.Status != domain.TransactionActive {
 		return domain.ErrTransactionNotActive
 	}
-	r.txns[tx.ID] = tx
+	existing.ReturnedAt = tx.ReturnedAt
+	existing.FineAmountCents = tx.FineAmountCents
+	existing.LateDays = tx.LateDays
+	existing.Status = domain.TransactionReturnPending
+	existing.StockEventID = nil
+	existing.UpdatedAt = tx.UpdatedAt
 	if outbox != nil {
 		r.outbox[outbox.ID] = outbox
 	}
 	return nil
 }
 
+func (r *handlerFakeTxnRepo) FinalizeReturn(ctx context.Context, id, stockEventID string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionReturnPending {
+		return domain.ErrTransactionNotPending
+	}
+	if tx.LateDays > 0 {
+		tx.Status = domain.TransactionReturnedLate
+	} else {
+		tx.Status = domain.TransactionReturned
+	}
+	tx.StockEventID = &stockEventID
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) RejectReturn(ctx context.Context, id string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionReturnPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionActive
+	tx.ReturnedAt = nil
+	tx.FineAmountCents = 0
+	tx.LateDays = 0
+	tx.StockEventID = nil
+	return nil
+}
+
 func (r *handlerFakeTxnRepo) FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {
 	var result []domain.BorrowTransaction
 	for _, tx := range r.txns {
-		if tx.UserID == userID && tx.Status == domain.TransactionActive {
+		if tx.UserID == userID && (tx.Status == domain.TransactionActive || tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) {
 			result = append(result, *tx)
 		}
 	}
@@ -360,7 +405,7 @@ func (r *handlerFakeTxnRepo) FindActiveByUser(ctx context.Context, userID string
 func (r *handlerFakeTxnRepo) CountActiveByUser(ctx context.Context, userID string) (int, error) {
 	count := 0
 	for _, tx := range r.txns {
-		if tx.UserID == userID && tx.Status == domain.TransactionActive {
+		if tx.UserID == userID && (tx.Status == domain.TransactionActive || tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) {
 			count++
 		}
 	}
@@ -401,6 +446,82 @@ func (r *handlerFakeTxnRepo) ListAll(ctx context.Context, page, perPage int) ([]
 		end = len(result)
 	}
 	return result[start:end], total, nil
+}
+
+func (r *handlerFakeTxnRepo) ActivateBorrow(ctx context.Context, id, stockEventID string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionActive
+	tx.StockEventID = &stockEventID
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) CancelBorrow(ctx context.Context, id string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionCancelled
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) SkipOutboxByTransactionID(ctx context.Context, transactionID string) error {
+	for _, event := range r.outbox {
+		if event.TransactionID == transactionID && (event.Status == domain.StockEventOutboxPending || event.Status == domain.StockEventOutboxFailed) {
+			event.Status = domain.StockEventOutboxSkipped
+		}
+	}
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) FindPendingOlderThan(ctx context.Context, threshold time.Time) ([]domain.BorrowTransaction, error) {
+	var result []domain.BorrowTransaction
+	for _, tx := range r.txns {
+		if (tx.Status == domain.TransactionPending || tx.Status == domain.TransactionReturnPending) && tx.CreatedAt.Before(threshold) {
+			result = append(result, *tx)
+		}
+	}
+	return result, nil
+}
+
+func (r *handlerFakeTxnRepo) ReconcileCancelBorrow(ctx context.Context, id string, outbox *domain.StockEventOutbox) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if tx.Status != domain.TransactionPending {
+		return domain.ErrTransactionNotPending
+	}
+	tx.Status = domain.TransactionCancelled
+
+	for _, event := range r.outbox {
+		if event.TransactionID == id && event.EventType == "DECREASE" && (event.Status == domain.StockEventOutboxPending || event.Status == domain.StockEventOutboxFailed) {
+			event.Status = domain.StockEventOutboxSkipped
+		}
+	}
+
+	if outbox != nil {
+		r.outbox[outbox.ID] = outbox
+	}
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) RequeueStockCommand(ctx context.Context, transactionID, eventType string) error {
+	for _, event := range r.outbox {
+		if event.TransactionID == transactionID && event.EventType == eventType {
+			event.Status = domain.StockEventOutboxPending
+			return nil
+		}
+	}
+	return fmt.Errorf("not found")
 }
 
 func (r *handlerFakeTxnRepo) addTransaction(userID, bookID string) *domain.BorrowTransaction {
@@ -476,10 +597,13 @@ func newHandlerFakeBookClient() *handlerFakeBookClient {
 }
 
 func (c *handlerFakeBookClient) GetBook(ctx context.Context, bookID string) (*domain.BookSnapshot, error) {
+	available := c.stock[bookID]
 	return &domain.BookSnapshot{
-		ISBN:   "isbn-" + bookID,
-		Title:  "Book " + bookID,
-		Author: "Author",
+		ISBN:           "isbn-" + bookID,
+		Title:          "Book " + bookID,
+		Author:         "Author",
+		AvailableStock: available,
+		CanBorrow:      available > 0,
 	}, nil
 }
 

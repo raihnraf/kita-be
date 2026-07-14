@@ -9,6 +9,7 @@ const (
 	StockEventOutboxProcessing StockEventOutboxStatus = "PROCESSING"
 	StockEventOutboxPublished  StockEventOutboxStatus = "PUBLISHED"
 	StockEventOutboxFailed     StockEventOutboxStatus = "FAILED"
+	StockEventOutboxSkipped    StockEventOutboxStatus = "SKIPPED"
 )
 
 type StockEventOutbox struct {

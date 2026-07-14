@@ -53,6 +53,23 @@ func TestCreatedResponse(t *testing.T) {
 	}
 }
 
+func TestAcceptedResponse(t *testing.T) {
+	app := fiber.New()
+	app.Post("/test", func(c *fiber.Ctx) error {
+		return response.Accepted(c, fiber.Map{"status": "PENDING"})
+	})
+
+	req := httptest.NewRequest(fiber.MethodPost, "/test", nil)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if resp.StatusCode != fiber.StatusAccepted {
+		t.Errorf("expected status 202, got %d", resp.StatusCode)
+	}
+}
+
 func TestErrorResponse(t *testing.T) {
 	app := fiber.New()
 	app.Get("/test", func(c *fiber.Ctx) error {

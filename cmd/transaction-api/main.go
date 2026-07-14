@@ -61,7 +61,7 @@ func main() {
 	fineCalc := usecase.NewFineCalculator(cfg.DailyFineAmountCents)
 
 	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempotencyRepo, bookClient, cfg.MaxActiveBorrows, cfg.LoanDays)
-	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempotencyRepo, bookClient, fineCalc)
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempotencyRepo, fineCalc)
 	historyUC := usecase.NewHistoryUsecase(txnRepo, auditRepo)
 
 	if cfg.RabbitMQURL == "" {
@@ -77,10 +77,16 @@ func main() {
 		} else {
 			msgPublisher := txnmsg.NewPublisher(rmqPublisher)
 			dispatcher := txnmsg.NewOutboxDispatcher(outboxRepo, msgPublisher, 2*time.Second, 10)
+			resultConsumer := rabbitmq.NewConsumer(rmqConn, rabbitmq.ResultQueueName)
+			resultHandler := txnmsg.NewResultHandler(txnRepo, auditRepo)
 			go dispatcher.Run(serviceCtx)
+			go resultConsumer.ConsumeWithReconnect(serviceCtx, resultHandler.HandleStockResult)
 			logger.Info("rabbitmq stock event outbox dispatcher enabled")
 		}
 	}
+
+	reconciler := txnmsg.NewReconciliationWorker(txnRepo, 30*time.Second, 1*time.Minute)
+	go reconciler.Run(serviceCtx)
 
 	handler := txnhttp.NewTransactionHandler(borrowUC, returnUC, historyUC)
 

@@ -86,6 +86,17 @@ func (r *StockEventOutboxRepository) MarkFailed(ctx context.Context, id string, 
 	return err
 }
 
+func (r *StockEventOutboxRepository) SkipByTransactionID(ctx context.Context, transactionID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE stock_event_outbox SET status = 'SKIPPED', updated_at = NOW() WHERE transaction_id = $1 AND status IN ('PENDING', 'FAILED')`,
+		transactionID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to skip outbox events: %w", err)
+	}
+	return nil
+}
+
 func scanOutboxRows(rows pgx.Rows) ([]domain.StockEventOutbox, error) {
 	var events []domain.StockEventOutbox
 	for rows.Next() {

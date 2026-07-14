@@ -74,9 +74,6 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 		}
 	}
 
-	// Unlocked pre-check: early exit for obvious over-limit cases.
-	// This is an optimisation only — the definitive guard is the advisory-locked
-	// count inside CreateBorrowWithOutbox below.
 	activeCount, err := uc.txnRepo.CountActiveByUser(ctx, input.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count active borrows: %w", err)
@@ -93,8 +90,11 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 		logger.Warn("book lookup failed", "book_id", input.BookID, "error", err.Error())
 		return nil, apperror.Conflict("book is not available")
 	}
+	if !bookSnapshot.CanBorrow {
+		return nil, apperror.Conflict("book stock could not be reserved")
+	}
 
-	txn := domain.NewBorrowTransaction(
+	txn := domain.NewPendingBorrowTransaction(
 		uuid.New().String(),
 		ref,
 		input.UserID,
@@ -104,39 +104,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 	)
 	txn.SetBookSnapshot(bookSnapshot)
 
-	// Decrease stock via the Book service. This serves as both the stock-availability
-	// check (Book service enforces available_stock >= qty) and the actual reservation.
-	// The decrease happens before the DB commit so that a stock=0 failure is caught
-	// cleanly before a transaction row is ever written.
-	stockEventID, err := uc.bookClient.DecreaseStock(ctx, input.BookID, 1, txn.ID)
-	if err != nil {
-		logger.Warn("stock reservation failed", "book_id", input.BookID, "transaction_id", txn.ID, "error", err.Error())
-		return nil, apperror.Conflict("book stock could not be reserved")
-	}
-
-	txn.StockEventID = &stockEventID
-
 	outbox := domain.NewStockEventOutbox(uuid.New().String(), "DECREASE", txn)
 	if err := uc.txnRepo.CreateBorrowWithOutbox(ctx, txn, uc.maxActive, outbox); err != nil {
-		// DB rolled back — the outbox row was rolled back with it, so the dispatcher
-		// will never retry this event. We must compensate the stock decrease we already
-		// made. Use the same txn.ID so the Book service's event-idempotency constraint
-		// prevents double-compensation on retries. If the immediate compensation call
-		// fails, persist a compensation outbox event so the rollback remains traceable
-		// and retryable.
-		compensateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, compensateErr := uc.bookClient.IncreaseStock(compensateCtx, input.BookID, 1, txn.ID); compensateErr != nil {
-			logger.Error("immediate stock compensation failed after borrow rollback; enqueuing fallback",
-				"book_id", input.BookID,
-				"transaction_id", txn.ID,
-				"borrow_error", err.Error(),
-				"compensation_error", compensateErr.Error(),
-			)
-			if enqueueErr := enqueueCompensationStockEvent(uc.txnRepo, txn, "INCREASE", "borrow_create_failed"); enqueueErr != nil {
-				return nil, fmt.Errorf("failed to create transaction and recover stock: %w", enqueueErr)
-			}
-		}
 		if errors.Is(err, domain.ErrActiveBorrowLimitReached) {
 			return nil, apperror.Conflictf("maximum %d active borrows reached", uc.maxActive)
 		}
@@ -146,8 +115,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 	audit := &domain.TransactionAudit{
 		ID:            uuid.New().String(),
 		TransactionID: txn.ID,
-		ToStatus:      string(domain.TransactionActive),
-		Reason:        "Book borrowed",
+		ToStatus:      string(domain.TransactionPending),
+		Reason:        "Borrow requested; waiting for stock reservation",
 		CreatedAt:     now,
 	}
 	if err := uc.auditRepo.Create(ctx, audit); err != nil {

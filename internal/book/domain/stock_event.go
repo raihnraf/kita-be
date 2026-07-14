@@ -1,8 +1,11 @@
 package domain
 
 import (
+	"errors"
 	"time"
 )
+
+var ErrStockEventNotFound = errors.New("stock event not found")
 
 type StockEventType string
 

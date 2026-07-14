@@ -16,6 +16,8 @@ type MessageHandler func(msg Message) error
 type Message struct {
 	EventID                  string `json:"event_id"`
 	EventType                string `json:"event_type"`
+	Result                   string `json:"result,omitempty"`
+	ErrorMessage             string `json:"error_message,omitempty"`
 	TransactionID            string `json:"transaction_id"`
 	TransactionRef           string `json:"transaction_ref"`
 	CompensationForEventType string `json:"compensation_for_event_type,omitempty"`
@@ -51,31 +53,7 @@ func (c *Consumer) Setup() error {
 	}
 	defer func() { _ = ch.Close() }()
 
-	if err := ch.ExchangeDeclare(ExchangeName, ExchangeType, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("failed to declare exchange: %w", err)
-	}
-
-	queueArgs := amqp.Table{
-		"x-dead-letter-exchange":    "",
-		"x-dead-letter-routing-key": DLQName,
-	}
-
-	if _, err := ch.QueueDeclare(QueueName, true, false, false, false, queueArgs); err != nil {
-		return fmt.Errorf("failed to declare queue: %w", err)
-	}
-
-	// bind both routing keys so decrease and increase both land on the same queue
-	for _, rk := range []string{RoutingKeyDec, RoutingKeyInc} {
-		if err := ch.QueueBind(QueueName, rk, ExchangeName, false, nil); err != nil {
-			return fmt.Errorf("failed to bind queue (routing_key=%s): %w", rk, err)
-		}
-	}
-
-	if _, err := ch.QueueDeclare(DLQName, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("failed to declare dlq: %w", err)
-	}
-
-	return nil
+	return declareTopology(ch)
 }
 
 // ConsumeWithReconnect runs Consume in a loop, reconnecting on broker disconnects.

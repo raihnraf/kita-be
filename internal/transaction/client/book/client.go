@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	domain "kita-be/internal/transaction/domain"
 	"kita-be/internal/platform/middleware"
+	domain "kita-be/internal/transaction/domain"
 )
 
 type Client struct {
@@ -70,9 +70,11 @@ func (c *Client) GetBook(ctx context.Context, bookID string) (*domain.BookSnapsh
 	var result struct {
 		Success bool `json:"success"`
 		Data    struct {
-			ISBN   string `json:"isbn"`
-			Title  string `json:"title"`
-			Author string `json:"author"`
+			ISBN           string `json:"isbn"`
+			Title          string `json:"title"`
+			Author         string `json:"author"`
+			AvailableStock int    `json:"available_stock"`
+			CanBorrow      bool   `json:"can_borrow"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -80,9 +82,11 @@ func (c *Client) GetBook(ctx context.Context, bookID string) (*domain.BookSnapsh
 	}
 
 	return &domain.BookSnapshot{
-		ISBN:   result.Data.ISBN,
-		Title:  result.Data.Title,
-		Author: result.Data.Author,
+		ISBN:           result.Data.ISBN,
+		Title:          result.Data.Title,
+		Author:         result.Data.Author,
+		AvailableStock: result.Data.AvailableStock,
+		CanBorrow:      result.Data.CanBorrow,
 	}, nil
 }
 

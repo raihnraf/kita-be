@@ -55,7 +55,7 @@ func (h *TransactionHandler) Borrow(c *fiber.Ctx) error {
 		return err
 	}
 
-	return response.Created(c, FromDomain(*output.Transaction))
+	return response.Accepted(c, FromDomain(*output.Transaction))
 }
 
 func (h *TransactionHandler) Return(c *fiber.Ctx) error {
@@ -86,7 +86,7 @@ func (h *TransactionHandler) Return(c *fiber.Ctx) error {
 		return err
 	}
 
-	return response.OK(c, FromDomain(*output.Transaction))
+	return response.Accepted(c, FromDomain(*output.Transaction))
 }
 
 func (h *TransactionHandler) History(c *fiber.Ctx) error {

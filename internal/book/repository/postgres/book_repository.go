@@ -308,6 +308,9 @@ func (r *BookRepository) FindStockEventByEventID(ctx context.Context, eventID st
 		&ev.ErrorMessage, &ev.ProcessedAt, &ev.CreatedAt, &ev.UpdatedAt,
 	)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, domain.ErrStockEventNotFound
+		}
 		return nil, fmt.Errorf("failed to find stock event: %w", err)
 	}
 	ev.EventType = domain.StockEventType(evType)
@@ -328,6 +331,9 @@ func (r *BookRepository) FindStockEventByTransactionID(ctx context.Context, txnI
 		&ev.ErrorMessage, &ev.ProcessedAt, &ev.CreatedAt, &ev.UpdatedAt,
 	)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, domain.ErrStockEventNotFound
+		}
 		return nil, fmt.Errorf("failed to find stock event by transaction: %w", err)
 	}
 	ev.EventType = domain.StockEventType(evType)

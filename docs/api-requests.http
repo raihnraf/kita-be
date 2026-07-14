@@ -132,6 +132,8 @@ X-Internal-Token: {{internal_token}}
 GET {{base_transaction}}/api/v1/health
 
 ### Borrow a Book
+### Note: borrow is processed asynchronously. Returns HTTP 202 Accepted. The response status will be PENDING.
+### Poll GET /api/v1/transactions/{id} until the status becomes ACTIVE or CANCELLED.
 POST {{base_transaction}}/api/v1/transactions/borrow
 Content-Type: application/json
 Authorization: Bearer {{access_token}}
@@ -145,11 +147,13 @@ Authorization: Bearer {{access_token}}
 GET {{base_transaction}}/api/v1/transactions/active
 Authorization: Bearer {{access_token}}
 
-### Get Transaction Detail
+### Get Transaction Detail (use this to poll final borrow/return status)
 GET {{base_transaction}}/api/v1/transactions/{{transaction_id}}
 Authorization: Bearer {{access_token}}
 
 ### Return a Book
+### Note: return is processed asynchronously. Returns HTTP 202 Accepted. The response status will be RETURN_PENDING.
+### Poll GET /api/v1/transactions/{id} until the status becomes RETURNED, RETURNED_LATE, or ACTIVE if the return is rejected.
 POST {{base_transaction}}/api/v1/transactions/{{transaction_id}}/return
 Content-Type: application/json
 Authorization: Bearer {{access_token}}
