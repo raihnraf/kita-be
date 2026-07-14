@@ -108,19 +108,20 @@ func main() {
 	})
 
 	api := app.Group("/api/v1")
+	readLimiter := platformmw.RateLimit(120, time.Minute)
 	writeLimiter := platformmw.RateLimit(30, time.Minute)
 
 	protected := api.Group("", authmw.JWTAuth(jwtService))
 	protected.Post("/transactions/borrow", writeLimiter, handler.Borrow)
 	protected.Post("/transactions/:id/return", writeLimiter, handler.Return)
-	protected.Get("/transactions/history", handler.History)
-	protected.Get("/transactions/active", handler.Active)
-	protected.Get("/transactions/:id", handler.Detail)
+	protected.Get("/transactions/history", readLimiter, handler.History)
+	protected.Get("/transactions/active", readLimiter, handler.Active)
+	protected.Get("/transactions/:id", readLimiter, handler.Detail)
 
 	internal := api.Group("/internal", authmw.InternalAuth(cfg.InternalAPIToken))
-	internal.Get("/transactions", handler.InternalTransactions)
-	internal.Get("/transactions/:id/audits", handler.InternalTransactionAudits)
-	internal.Get("/transactions/:id", handler.InternalTransactionDetail)
+	internal.Get("/transactions", readLimiter, handler.InternalTransactions)
+	internal.Get("/transactions/:id/audits", readLimiter, handler.InternalTransactionAudits)
+	internal.Get("/transactions/:id", readLimiter, handler.InternalTransactionDetail)
 
 	go func() {
 		addr := fmt.Sprintf(":%s", cfg.ServerPort)

@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"kita-be/internal/book/usecase"
+	"kita-be/internal/platform/pagination"
 	"kita-be/internal/platform/response"
 	"kita-be/internal/platform/validation"
 )
@@ -37,7 +38,7 @@ func NewBookHandler(
 func (h *BookHandler) List(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	page, perPage = normalizePagination(page, perPage)
+	page, perPage = pagination.Normalize(page, perPage)
 	search := c.Query("search", "")
 	category := c.Query("category", "")
 
@@ -67,16 +68,6 @@ func (h *BookHandler) List(c *fiber.Ctx) error {
 		Total:      output.Total,
 		TotalPages: totalPages,
 	})
-}
-
-func normalizePagination(page, perPage int) (int, int) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-	return page, perPage
 }
 
 func (h *BookHandler) Get(c *fiber.Ctx) error {

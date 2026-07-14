@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	jwtsvc "kita-be/internal/auth/jwt"
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
 )
@@ -14,10 +13,10 @@ import (
 type RefreshUsecase struct {
 	userRepo         UserRepository
 	refreshTokenRepo RefreshTokenRepository
-	jwtSvc           *jwtsvc.Service
+	jwtSvc           TokenService
 }
 
-func NewRefreshUsecase(userRepo UserRepository, refreshTokenRepo RefreshTokenRepository, jwtSvc *jwtsvc.Service) *RefreshUsecase {
+func NewRefreshUsecase(userRepo UserRepository, refreshTokenRepo RefreshTokenRepository, jwtSvc TokenService) *RefreshUsecase {
 	return &RefreshUsecase{
 		userRepo:         userRepo,
 		refreshTokenRepo: refreshTokenRepo,

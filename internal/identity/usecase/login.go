@@ -6,8 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	jwtsvc "kita-be/internal/auth/jwt"
-	pwdsvc "kita-be/internal/auth/password"
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
 )
@@ -15,15 +13,15 @@ import (
 type LoginUsecase struct {
 	userRepo         UserRepository
 	refreshTokenRepo RefreshTokenRepository
-	pwdSvc           *pwdsvc.Service
-	jwtSvc           *jwtsvc.Service
+	pwdSvc           PasswordService
+	jwtSvc           TokenService
 }
 
 func NewLoginUsecase(
 	userRepo UserRepository,
 	refreshTokenRepo RefreshTokenRepository,
-	pwdSvc *pwdsvc.Service,
-	jwtSvc *jwtsvc.Service,
+	pwdSvc PasswordService,
+	jwtSvc TokenService,
 ) *LoginUsecase {
 	return &LoginUsecase{
 		userRepo:         userRepo,

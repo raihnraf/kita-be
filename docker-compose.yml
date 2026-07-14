@@ -44,6 +44,7 @@ services:
     container_name: kita-identity-api
     command: ./identity-api
     environment:
+      APP_ENV: development
       SERVER_PORT: "3000"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -77,6 +78,7 @@ services:
     container_name: kita-book-api
     command: ./book-api
     environment:
+      APP_ENV: development
       SERVER_PORT: "3000"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -108,6 +110,7 @@ services:
     container_name: kita-transaction-api
     command: ./transaction-api
     environment:
+      APP_ENV: development
       SERVER_PORT: "3000"
       BOOK_SERVICE_URL: "http://book-api:3000"
       DB_HOST: postgres
@@ -140,6 +143,7 @@ services:
     container_name: kita-book-worker
     command: ./book-worker
     environment:
+      APP_ENV: development
       SERVER_PORT: "3000"
       DB_HOST: postgres
       DB_PORT: "5432"

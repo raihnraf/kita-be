@@ -7,7 +7,7 @@ import (
 )
 
 type BookRepository interface {
-	List(ctx context.Context, input ListBooksInput) ([]domain.Book, int64, error)
+	List(ctx context.Context, input domain.ListBooksInput) ([]domain.Book, int64, error)
 	FindByID(ctx context.Context, id string) (*domain.Book, error)
 	FindByISBN(ctx context.Context, isbn string) (*domain.Book, error)
 	Create(ctx context.Context, book *domain.Book) error
@@ -20,9 +20,4 @@ type BookRepository interface {
 	FindStockEventByTransactionID(ctx context.Context, txnID string, eventType string) (*domain.BookStockEvent, error)
 }
 
-type ListBooksInput struct {
-	Search   string
-	Category string
-	Page     int
-	PerPage  int
-}
+type ListBooksInput = domain.ListBooksInput

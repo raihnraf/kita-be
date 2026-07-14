@@ -9,6 +9,7 @@ import (
 )
 
 type Config struct {
+	AppEnv               string
 	ServerPort           string
 	DBHost               string
 	DBPort               string
@@ -50,6 +51,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		AppEnv:               strings.ToLower(strings.TrimSpace(getEnv("APP_ENV", "development"))),
 		ServerPort:           getEnv("SERVER_PORT", "3000"),
 		DBHost:               getEnv("DB_HOST", "localhost"),
 		DBPort:               getEnv("DB_PORT", "5432"),
@@ -96,8 +98,22 @@ func (c *Config) validate() error {
 	if c.JWTSecret == "" {
 		return fmt.Errorf("JWT_SECRET is required")
 	}
+	if len(c.JWTSecret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be at least 32 characters")
+	}
+	if !hasMinimumDiversity(c.JWTSecret, 8) {
+		return fmt.Errorf("JWT_SECRET must contain enough character diversity")
+	}
 	if c.InternalAPIToken == "" {
 		return fmt.Errorf("INTERNAL_API_TOKEN is required")
+	}
+	if c.AppEnv == "production" {
+		if c.JWTSecret == "dev-jwt-secret-change-in-production" {
+			return fmt.Errorf("JWT_SECRET must not use the development default in production")
+		}
+		if c.InternalAPIToken == "dev-internal-token" {
+			return fmt.Errorf("INTERNAL_API_TOKEN must not use the development default in production")
+		}
 	}
 	if c.JWTExpiry <= 0 {
 		return fmt.Errorf("JWT_EXPIRY must be positive")
@@ -115,6 +131,17 @@ func (c *Config) validate() error {
 		return fmt.Errorf("MAX_ACTIVE_BORROWS must be positive")
 	}
 	return nil
+}
+
+func hasMinimumDiversity(value string, minimumUniqueChars int) bool {
+	seen := make(map[rune]struct{}, minimumUniqueChars)
+	for _, ch := range value {
+		seen[ch] = struct{}{}
+		if len(seen) >= minimumUniqueChars {
+			return true
+		}
+	}
+	return false
 }
 
 func getEnv(key, defaultVal string) string {

@@ -72,11 +72,12 @@ func main() {
 	})
 
 	api := app.Group("/api/v1")
+	readLimiter := platformmw.RateLimit(300, time.Minute)
 	writeLimiter := platformmw.RateLimit(60, time.Minute)
 
-	api.Get("/books", handler.List)
-	api.Get("/books/:id", handler.Get)
-	api.Get("/books/:id/availability", handler.Availability)
+	api.Get("/books", readLimiter, handler.List)
+	api.Get("/books/:id", readLimiter, handler.Get)
+	api.Get("/books/:id/availability", readLimiter, handler.Availability)
 
 	admin := api.Group("", authmw.InternalAuth(cfg.InternalAPIToken))
 	admin.Post("/books", writeLimiter, handler.Create)

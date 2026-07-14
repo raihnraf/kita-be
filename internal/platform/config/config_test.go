@@ -22,8 +22,8 @@ func TestLoadValidConfig(t *testing.T) {
 	if cfg.DBHost != "localhost" {
 		t.Errorf("expected DBHost localhost, got %s", cfg.DBHost)
 	}
-	if cfg.JWTSecret != "test-secret" {
-		t.Errorf("expected JWTSecret test-secret, got %s", cfg.JWTSecret)
+	if cfg.JWTSecret != "test-secret-with-at-least-32-chars" {
+		t.Errorf("unexpected JWTSecret: %s", cfg.JWTSecret)
 	}
 	if cfg.JWTExpiry != 15*time.Minute {
 		t.Errorf("expected JWTExpiry 15m, got %s", cfg.JWTExpiry)
@@ -43,6 +43,32 @@ func TestLoadInvalidConfigMissingJWTSecret(t *testing.T) {
 	_, err := config.Load()
 	if err == nil {
 		t.Fatal("expected error for missing JWT_SECRET, got nil")
+	}
+}
+
+func TestLoadInvalidConfigShortJWTSecret(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("JWT_SECRET", "short-secret")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error for short JWT_SECRET, got nil")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET must be at least 32 characters") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadInvalidConfigLowDiversityJWTSecret(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("JWT_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error for low-diversity JWT_SECRET, got nil")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET must contain enough character diversity") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -153,8 +179,36 @@ func TestLoadRejectsDailyFineAmountWithMoreThanTwoDecimals(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsDevelopmentSecretsInProduction(t *testing.T) {
+	cases := []struct {
+		key      string
+		value    string
+		contains string
+	}{
+		{key: "JWT_SECRET", value: "dev-jwt-secret-change-in-production", contains: "JWT_SECRET must not use the development default in production"},
+		{key: "INTERNAL_API_TOKEN", value: "dev-internal-token", contains: "INTERNAL_API_TOKEN must not use the development default in production"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("APP_ENV", "production")
+			t.Setenv(tc.key, tc.value)
+
+			_, err := config.Load()
+			if err == nil {
+				t.Fatalf("expected error for %s", tc.key)
+			}
+			if !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("expected error containing %q, got %q", tc.contains, err.Error())
+			}
+		})
+	}
+}
+
 func setValidEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("APP_ENV", "test")
 	t.Setenv("SERVER_PORT", "3000")
 	t.Setenv("DB_HOST", "localhost")
 	t.Setenv("DB_PORT", "5432")
@@ -162,7 +216,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("DB_PASSWORD", "postgres")
 	t.Setenv("DB_NAME", "kita")
 	t.Setenv("DB_SSLMODE", "disable")
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", "test-secret-with-at-least-32-chars")
 	t.Setenv("JWT_EXPIRY", "15m")
 	t.Setenv("REFRESH_TOKEN_EXPIRY", "168h")
 	t.Setenv("INTERNAL_API_TOKEN", "test-internal-token")

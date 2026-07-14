@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"kita-be/internal/platform/apperror"
+	"kita-be/internal/platform/pagination"
 	domain "kita-be/internal/transaction/domain"
 )
 
@@ -54,12 +55,7 @@ func (uc *HistoryUsecase) GetAll(ctx context.Context, input HistoryInput) (*Hist
 }
 
 func normalizeHistoryInput(input *HistoryInput) {
-	if input.Page < 1 {
-		input.Page = 1
-	}
-	if input.PerPage < 1 || input.PerPage > 100 {
-		input.PerPage = 20
-	}
+	input.Page, input.PerPage = pagination.Normalize(input.Page, input.PerPage)
 }
 
 func (uc *HistoryUsecase) GetActive(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {

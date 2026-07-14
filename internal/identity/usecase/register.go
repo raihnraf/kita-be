@@ -8,8 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	jwtsvc "kita-be/internal/auth/jwt"
-	pwdsvc "kita-be/internal/auth/password"
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
 )
@@ -17,11 +15,11 @@ import (
 type RegisterUsecase struct {
 	userRepo         UserRepository
 	refreshTokenRepo RefreshTokenRepository
-	pwdSvc           *pwdsvc.Service
-	jwtSvc           *jwtsvc.Service
+	pwdSvc           PasswordService
+	jwtSvc           TokenService
 }
 
-func NewRegisterUsecase(userRepo UserRepository, refreshTokenRepo RefreshTokenRepository, pwdSvc *pwdsvc.Service, jwtSvc *jwtsvc.Service) *RegisterUsecase {
+func NewRegisterUsecase(userRepo UserRepository, refreshTokenRepo RefreshTokenRepository, pwdSvc PasswordService, jwtSvc TokenService) *RegisterUsecase {
 	return &RegisterUsecase{userRepo: userRepo, refreshTokenRepo: refreshTokenRepo, pwdSvc: pwdSvc, jwtSvc: jwtSvc}
 }
 

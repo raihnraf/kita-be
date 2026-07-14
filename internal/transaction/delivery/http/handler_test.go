@@ -86,6 +86,63 @@ func TestTransactionHandlerBorrowSuccess(t *testing.T) {
 	}
 }
 
+func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
+	app, deps := newTransactionTestApp(testUserID)
+	deps.bookClient.setStock(testBookID, 2)
+
+	borrowReq := httptest.NewRequest(fiber.MethodPost, "/transactions/borrow", strings.NewReader(`{"book_id":"`+testBookID+`","idempotency_key":"borrow-return-1"}`))
+	borrowReq.Header.Set("Content-Type", "application/json")
+
+	borrowResp, err := app.Test(borrowReq)
+	if err != nil {
+		t.Fatalf("expected no borrow error, got %v", err)
+	}
+	if borrowResp.StatusCode != fiber.StatusCreated {
+		t.Fatalf("expected borrow status %d, got %d", fiber.StatusCreated, borrowResp.StatusCode)
+	}
+
+	var borrowBody struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(borrowResp.Body).Decode(&borrowBody); err != nil {
+		t.Fatalf("failed to decode borrow response: %v", err)
+	}
+	if borrowBody.Data.ID == "" {
+		t.Fatal("expected transaction id")
+	}
+	if got := deps.bookClient.stock[testBookID]; got != 1 {
+		t.Fatalf("expected stock 1 after borrow, got %d", got)
+	}
+
+	returnReq := httptest.NewRequest(fiber.MethodPost, "/transactions/"+borrowBody.Data.ID+"/return", nil)
+	returnResp, err := app.Test(returnReq)
+	if err != nil {
+		t.Fatalf("expected no return error, got %v", err)
+	}
+	if returnResp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected return status %d, got %d", fiber.StatusOK, returnResp.StatusCode)
+	}
+
+	var returnBody struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(returnResp.Body).Decode(&returnBody); err != nil {
+		t.Fatalf("failed to decode return response: %v", err)
+	}
+	if !returnBody.Success || returnBody.Data.ID != borrowBody.Data.ID || returnBody.Data.Status != string(domain.TransactionReturned) {
+		t.Fatalf("unexpected return response: %+v", returnBody)
+	}
+	if got := deps.bookClient.stock[testBookID]; got != 2 {
+		t.Fatalf("expected stock restored to 2, got %d", got)
+	}
+}
+
 func TestTransactionHandlerHistoryUsesCurrentUserAndNormalizesPagination(t *testing.T) {
 	app, deps := newTransactionTestApp(testUserID)
 	deps.txnRepo.addTransaction(testUserID, testBookID)
@@ -151,6 +208,7 @@ func newTransactionTestApp(userID string) (*fiber.App, *transactionTestDeps) {
 		return c.Next()
 	})
 	app.Post("/transactions/borrow", handler.Borrow)
+	app.Post("/transactions/:id/return", handler.Return)
 	app.Get("/transactions/history", handler.History)
 	return app, deps
 }

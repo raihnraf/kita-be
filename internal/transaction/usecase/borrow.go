@@ -62,7 +62,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 		requestHash := hashBorrowRequest(input.UserID, input.BookID, input.IdempotencyKey)
 		isDuplicate, err := uc.idempotencyRepo.CheckOrCreate(ctx, "borrow", input.IdempotencyKey, requestHash)
 		if err != nil {
-			return nil, apperror.Conflict(err.Error())
+			logger.Warn("idempotency check failed", "user_id", input.UserID, "book_id", input.BookID, "error", err.Error())
+			return nil, apperror.Conflict("idempotency key conflicts with another request")
 		}
 		if isDuplicate {
 			rec, err := uc.idempotencyRepo.GetRecord(ctx, "borrow", input.IdempotencyKey)
@@ -91,7 +92,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 	ref := fmt.Sprintf("TXN-%d", now.UnixNano())
 	bookSnapshot, err := uc.bookClient.GetBook(ctx, input.BookID)
 	if err != nil {
-		return nil, apperror.Conflictf("failed to load book: %v", err)
+		logger.Warn("book lookup failed", "book_id", input.BookID, "error", err.Error())
+		return nil, apperror.Conflict("book is not available")
 	}
 
 	txn := domain.NewBorrowTransaction(
@@ -106,7 +108,8 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 
 	stockEventID, err := uc.bookClient.DecreaseStock(ctx, input.BookID, 1, txn.ID)
 	if err != nil {
-		return nil, apperror.Conflictf("failed to reserve stock: %v", err)
+		logger.Warn("stock reservation failed", "book_id", input.BookID, "transaction_id", txn.ID, "error", err.Error())
+		return nil, apperror.Conflict("book stock could not be reserved")
 	}
 
 	txn.StockEventID = &stockEventID

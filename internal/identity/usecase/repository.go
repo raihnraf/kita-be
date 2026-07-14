@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"time"
 
 	domain "kita-be/internal/identity/domain"
 )
@@ -18,4 +19,15 @@ type RefreshTokenRepository interface {
 	RevokeByID(ctx context.Context, id string) error
 	Rotate(ctx context.Context, oldTokenID string, newToken *domain.RefreshToken) error
 	RevokeByUserID(ctx context.Context, userID string) error
+}
+
+type PasswordService interface {
+	Hash(password string) (string, error)
+	Verify(password, hash string) bool
+}
+
+type TokenService interface {
+	GenerateAccessToken(userID, email, role string) (string, error)
+	GenerateRefreshToken() (string, time.Time, error)
+	Expiry() time.Duration
 }

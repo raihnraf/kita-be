@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	domain "kita-be/internal/book/domain"
-	"kita-be/internal/book/usecase"
 )
 
 type BookRepository struct {
@@ -94,7 +93,7 @@ func NewBookRepository(pool *pgxpool.Pool) *BookRepository {
 	return &BookRepository{pool: pool}
 }
 
-func (r *BookRepository) List(ctx context.Context, input usecase.ListBooksInput) ([]domain.Book, int64, error) {
+func (r *BookRepository) List(ctx context.Context, input domain.ListBooksInput) ([]domain.Book, int64, error) {
 	var conditions []string
 	var args []interface{}
 	argIdx := 1

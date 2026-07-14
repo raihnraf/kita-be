@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
 )
 
@@ -37,6 +36,5 @@ func (uc *LogoutUsecase) Execute(ctx context.Context, input LogoutInput) error {
 	}
 
 	storedToken.Revoke()
-	_ = domain.RefreshToken{}
 	return nil
 }

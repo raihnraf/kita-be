@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"kita-be/internal/platform/pagination"
 	"kita-be/internal/platform/response"
 	"kita-be/internal/platform/validation"
 	"kita-be/internal/transaction/usecase"
@@ -87,7 +88,7 @@ func (h *TransactionHandler) History(c *fiber.Ctx) error {
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	page, perPage = normalizePagination(page, perPage)
+	page, perPage = pagination.Normalize(page, perPage)
 
 	output, err := h.history.GetHistory(c.Context(), usecase.HistoryInput{
 		UserID:  userID,
@@ -114,16 +115,6 @@ func (h *TransactionHandler) History(c *fiber.Ctx) error {
 		Total:      output.Total,
 		TotalPages: totalPages,
 	})
-}
-
-func normalizePagination(page, perPage int) (int, int) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-	return page, perPage
 }
 
 func (h *TransactionHandler) Active(c *fiber.Ctx) error {
@@ -167,7 +158,7 @@ func (h *TransactionHandler) Detail(c *fiber.Ctx) error {
 func (h *TransactionHandler) InternalTransactions(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	page, perPage = normalizePagination(page, perPage)
+	page, perPage = pagination.Normalize(page, perPage)
 
 	output, err := h.history.GetAll(c.Context(), usecase.HistoryInput{
 		Page:    page,

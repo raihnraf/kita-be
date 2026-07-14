@@ -4,6 +4,7 @@ import (
 	"context"
 
 	domain "kita-be/internal/book/domain"
+	"kita-be/internal/platform/pagination"
 )
 
 type ListBooksUsecase struct {
@@ -20,12 +21,7 @@ type ListBooksOutput struct {
 }
 
 func (uc *ListBooksUsecase) Execute(ctx context.Context, input ListBooksInput) (*ListBooksOutput, error) {
-	if input.Page < 1 {
-		input.Page = 1
-	}
-	if input.PerPage < 1 || input.PerPage > 100 {
-		input.PerPage = 20
-	}
+	input.Page, input.PerPage = pagination.Normalize(input.Page, input.PerPage)
 
 	books, total, err := uc.bookRepo.List(ctx, input)
 	if err != nil {
