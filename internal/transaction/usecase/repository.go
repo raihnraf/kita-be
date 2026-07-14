@@ -10,9 +10,11 @@ type TransactionRepository interface {
 	Create(ctx context.Context, tx *domain.BorrowTransaction) error
 	CreateIfUserBelowActiveLimit(ctx context.Context, tx *domain.BorrowTransaction, maxActive int) error
 	CreateBorrowWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, maxActive int, outbox *domain.StockEventOutbox) error
+	EnqueueStockEvent(ctx context.Context, outbox *domain.StockEventOutbox) error
 	FindByID(ctx context.Context, id string) (*domain.BorrowTransaction, error)
 	FindByRef(ctx context.Context, ref string) (*domain.BorrowTransaction, error)
 	Update(ctx context.Context, tx *domain.BorrowTransaction) error
+	UpdateStockEventID(ctx context.Context, id, stockEventID string) error
 	ReturnIfActive(ctx context.Context, tx *domain.BorrowTransaction) error
 	ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error
 	FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error)

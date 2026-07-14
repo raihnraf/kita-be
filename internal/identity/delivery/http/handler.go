@@ -53,7 +53,7 @@ func (h *IdentityHandler) Register(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "password must be at least 6 characters")
 	}
 
-	output, err := h.register.Execute(c.Context(), usecase.RegisterInput{
+	output, err := h.register.Execute(c.UserContext(), usecase.RegisterInput{
 		FullName: req.FullName,
 		Email:    req.Email,
 		Password: req.Password,
@@ -119,7 +119,7 @@ func (h *IdentityHandler) handlePasswordGrant(c *fiber.Ctx, req TokenRequest) er
 		return response.BadRequest(c, "VALIDATION_ERROR", "email must be valid")
 	}
 
-	output, err := h.login.Execute(c.Context(), usecase.LoginInput{
+	output, err := h.login.Execute(c.UserContext(), usecase.LoginInput{
 		Email:    email,
 		Password: password,
 	})
@@ -145,7 +145,7 @@ func (h *IdentityHandler) handleRefreshGrant(c *fiber.Ctx, req TokenRequest) err
 		return response.BadRequest(c, "VALIDATION_ERROR", "refresh_token is required")
 	}
 
-	output, err := h.refresh.Execute(c.Context(), usecase.RefreshInput{
+	output, err := h.refresh.Execute(c.UserContext(), usecase.RefreshInput{
 		RefreshToken: refreshToken,
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func (h *IdentityHandler) Logout(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "refresh_token is required")
 	}
 
-	if err := h.logout.Execute(c.Context(), usecase.LogoutInput{
+	if err := h.logout.Execute(c.UserContext(), usecase.LogoutInput{
 		RefreshToken: req.RefreshToken,
 	}); err != nil {
 		return err
@@ -185,7 +185,7 @@ func (h *IdentityHandler) Profile(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "UNAUTHORIZED", "invalid or missing token")
 	}
 
-	output, err := h.profile.Execute(c.Context(), userID)
+	output, err := h.profile.Execute(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}

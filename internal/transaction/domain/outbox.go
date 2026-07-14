@@ -12,20 +12,22 @@ const (
 )
 
 type StockEventOutbox struct {
-	ID             string
-	EventType      string
-	TransactionID  string
-	TransactionRef string
-	UserID         string
-	BookID         string
-	Quantity       int
-	Status         StockEventOutboxStatus
-	Attempts       int
-	LastError      *string
-	NextAttemptAt  time.Time
-	PublishedAt    *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                       string
+	EventType                string
+	TransactionID            string
+	TransactionRef           string
+	CompensationForEventType *string
+	CompensationReason       *string
+	UserID                   string
+	BookID                   string
+	Quantity                 int
+	Status                   StockEventOutboxStatus
+	Attempts                 int
+	LastError                *string
+	NextAttemptAt            time.Time
+	PublishedAt              *time.Time
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 func NewStockEventOutbox(id, eventType string, tx *BorrowTransaction) *StockEventOutbox {
@@ -43,4 +45,9 @@ func NewStockEventOutbox(id, eventType string, tx *BorrowTransaction) *StockEven
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
+}
+
+func (o *StockEventOutbox) SetCompensationMetadata(compensatesEventType, reason string) {
+	o.CompensationForEventType = &compensatesEventType
+	o.CompensationReason = &reason
 }

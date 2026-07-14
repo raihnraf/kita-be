@@ -236,12 +236,6 @@ paths:
       summary: Check whether a book can be borrowed
       parameters:
         - $ref: '#/components/parameters/ID'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReturnRequest'
       responses:
         '200':
           description: Book availability
@@ -356,6 +350,12 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequest'
       responses:
         '200':
           description: Borrow transaction returned

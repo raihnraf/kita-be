@@ -46,7 +46,7 @@ func (h *TransactionHandler) Borrow(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "idempotency_key is required")
 	}
 
-	output, err := h.borrow.Execute(c.Context(), usecase.BorrowInput{
+	output, err := h.borrow.Execute(c.UserContext(), usecase.BorrowInput{
 		UserID:         userID,
 		BookID:         req.BookID,
 		IdempotencyKey: req.IdempotencyKey,
@@ -77,7 +77,7 @@ func (h *TransactionHandler) Return(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction id must be a valid UUID")
 	}
 
-	output, err := h.return_.Execute(c.Context(), usecase.ReturnInput{
+	output, err := h.return_.Execute(c.UserContext(), usecase.ReturnInput{
 		TransactionID:  txnID,
 		UserID:         userID,
 		IdempotencyKey: req.IdempotencyKey,
@@ -99,7 +99,7 @@ func (h *TransactionHandler) History(c *fiber.Ctx) error {
 	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
 	page, perPage = pagination.Normalize(page, perPage)
 
-	output, err := h.history.GetHistory(c.Context(), usecase.HistoryInput{
+	output, err := h.history.GetHistory(c.UserContext(), usecase.HistoryInput{
 		UserID:  userID,
 		Page:    page,
 		PerPage: perPage,
@@ -132,7 +132,7 @@ func (h *TransactionHandler) Active(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "UNAUTHORIZED", "invalid token")
 	}
 
-	txs, err := h.history.GetActive(c.Context(), userID)
+	txs, err := h.history.GetActive(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func (h *TransactionHandler) Detail(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction id must be a valid UUID")
 	}
 
-	tx, err := h.history.GetDetail(c.Context(), txnID, userID)
+	tx, err := h.history.GetDetail(c.UserContext(), txnID, userID)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (h *TransactionHandler) InternalTransactions(c *fiber.Ctx) error {
 	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
 	page, perPage = pagination.Normalize(page, perPage)
 
-	output, err := h.history.GetAll(c.Context(), usecase.HistoryInput{
+	output, err := h.history.GetAll(c.UserContext(), usecase.HistoryInput{
 		Page:    page,
 		PerPage: perPage,
 	})
@@ -201,7 +201,7 @@ func (h *TransactionHandler) InternalTransactionDetail(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction id must be a valid UUID")
 	}
 
-	tx, err := h.history.GetInternalDetail(c.Context(), txnID)
+	tx, err := h.history.GetInternalDetail(c.UserContext(), txnID)
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func (h *TransactionHandler) InternalTransactionAudits(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction id must be a valid UUID")
 	}
 
-	audits, err := h.history.GetInternalAudits(c.Context(), txnID)
+	audits, err := h.history.GetInternalAudits(c.UserContext(), txnID)
 	if err != nil {
 		return err
 	}

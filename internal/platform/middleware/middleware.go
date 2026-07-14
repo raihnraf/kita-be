@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -10,6 +11,10 @@ import (
 	"kita-be/internal/platform/logger"
 	"kita-be/internal/platform/response"
 )
+
+type ContextKey string
+
+const RequestIDKey ContextKey = "request_id"
 
 func RequestID() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -26,6 +31,10 @@ func RequestID() fiber.Handler {
 
 		c.Locals("request_id", requestID)
 		c.Set("X-Request-ID", requestID)
+
+		ctx := context.WithValue(c.UserContext(), RequestIDKey, requestID)
+		c.SetUserContext(ctx)
+
 		return c.Next()
 	}
 }

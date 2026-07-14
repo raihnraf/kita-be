@@ -9,15 +9,17 @@ import (
 )
 
 type StockEventPayload struct {
-	EventID        string `json:"event_id"`
-	EventType      string `json:"event_type"`
-	TransactionID  string `json:"transaction_id"`
-	TransactionRef string `json:"transaction_ref"`
-	UserID         string `json:"user_id"`
-	BookID         string `json:"book_id"`
-	Quantity       int    `json:"quantity"`
-	OccurredAt     string `json:"occurred_at"`
-	IdempotencyKey string `json:"idempotency_key"`
+	EventID                  string  `json:"event_id"`
+	EventType                string  `json:"event_type"`
+	TransactionID            string  `json:"transaction_id"`
+	TransactionRef           string  `json:"transaction_ref"`
+	CompensationForEventType *string `json:"compensation_for_event_type,omitempty"`
+	CompensationReason       *string `json:"compensation_reason,omitempty"`
+	UserID                   string  `json:"user_id"`
+	BookID                   string  `json:"book_id"`
+	Quantity                 int     `json:"quantity"`
+	OccurredAt               string  `json:"occurred_at"`
+	IdempotencyKey           string  `json:"idempotency_key"`
 }
 
 type Publisher struct {
@@ -34,17 +36,23 @@ func (p *Publisher) PublishStockEvent(ctx context.Context, event domain.StockEve
 		routingKey = rabbitmq.RoutingKeyInc
 	}
 
-	payload := StockEventPayload{
-		EventID:        event.ID,
-		EventType:      event.EventType,
-		TransactionID:  event.TransactionID,
-		TransactionRef: event.TransactionRef,
-		UserID:         event.UserID,
-		BookID:         event.BookID,
-		Quantity:       event.Quantity,
-		OccurredAt:     event.CreatedAt.UTC().Format(time.RFC3339),
-		IdempotencyKey: event.ID,
-	}
+	payload := stockEventPayloadFromOutbox(event)
 
 	return p.rmq.Publish(ctx, routingKey, payload)
+}
+
+func stockEventPayloadFromOutbox(event domain.StockEventOutbox) StockEventPayload {
+	return StockEventPayload{
+		EventID:                  event.ID,
+		EventType:                event.EventType,
+		TransactionID:            event.TransactionID,
+		TransactionRef:           event.TransactionRef,
+		CompensationForEventType: event.CompensationForEventType,
+		CompensationReason:       event.CompensationReason,
+		UserID:                   event.UserID,
+		BookID:                   event.BookID,
+		Quantity:                 event.Quantity,
+		OccurredAt:               event.CreatedAt.UTC().Format(time.RFC3339),
+		IdempotencyKey:           event.ID,
+	}
 }

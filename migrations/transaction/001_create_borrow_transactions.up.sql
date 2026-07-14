@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS borrow_transactions (
     due_at TIMESTAMP WITH TIME ZONE NOT NULL,
     returned_at TIMESTAMP WITH TIME ZONE,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-    fine_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    fine_amount_cents BIGINT NOT NULL DEFAULT 0,
     late_days INT NOT NULL DEFAULT 0,
     stock_event_id UUID,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),

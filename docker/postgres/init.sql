@@ -21,3 +21,4 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kita_transaction')\ge
 \i /migrations/transaction/003_create_idempotency_records.up.sql
 \i /migrations/transaction/004_add_book_snapshot_to_borrow_transactions.up.sql
 \i /migrations/transaction/005_create_stock_event_outbox.up.sql
+\i /migrations/transaction/006_add_stock_event_compensation_metadata.up.sql

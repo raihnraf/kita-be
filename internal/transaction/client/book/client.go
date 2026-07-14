@@ -9,6 +9,7 @@ import (
 	"time"
 
 	domain "kita-be/internal/transaction/domain"
+	"kita-be/internal/platform/middleware"
 )
 
 type Client struct {
@@ -42,6 +43,10 @@ func (c *Client) GetBook(ctx context.Context, bookID string) (*domain.BookSnapsh
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if reqID, ok := ctx.Value(middleware.RequestIDKey).(string); ok && reqID != "" {
+		req.Header.Set("X-Request-ID", reqID)
 	}
 
 	resp, err := c.client.Do(req)
@@ -144,6 +149,10 @@ func (c *Client) doRequest(ctx context.Context, url string, body StockChangeRequ
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Internal-Token", c.apiToken)
+
+	if reqID, ok := ctx.Value(middleware.RequestIDKey).(string); ok && reqID != "" {
+		req.Header.Set("X-Request-ID", reqID)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

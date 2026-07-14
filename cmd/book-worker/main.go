@@ -70,8 +70,9 @@ func main() {
 	logger.Info("book worker stopped")
 }
 
-func connectRabbitMQWithRetry(url string, attempts int, delay time.Duration) (*rabbitmq.Connection, error) {
+func connectRabbitMQWithRetry(url string, attempts int, initialDelay time.Duration) (*rabbitmq.Connection, error) {
 	var lastErr error
+	delay := initialDelay
 	for i := 1; i <= attempts; i++ {
 		conn, err := rabbitmq.NewConnection(url)
 		if err == nil {
@@ -80,6 +81,9 @@ func connectRabbitMQWithRetry(url string, attempts int, delay time.Duration) (*r
 		lastErr = err
 		logger.Warn("rabbitmq connection attempt failed", "attempt", i, "max_attempts", attempts, "error", err.Error())
 		time.Sleep(delay)
+		if delay < 30*time.Second {
+			delay *= 2
+		}
 	}
 	return nil, lastErr
 }

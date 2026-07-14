@@ -10,6 +10,7 @@ var (
 	ErrTransactionNotActive     = errors.New("transaction is not active")
 )
 
+
 type TransactionStatus string
 
 const (

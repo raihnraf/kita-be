@@ -24,14 +24,14 @@ type dbExecer interface {
 
 func (r *TransactionRepository) Create(ctx context.Context, tx *domain.BorrowTransaction) error {
 	query := `
-		INSERT INTO borrow_transactions (id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount, late_days, stock_event_id, created_at, updated_at)
+		INSERT INTO borrow_transactions (id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 	_, err := r.pool.Exec(ctx, query,
 		tx.ID, tx.TransactionRef, tx.UserID, tx.BookID,
 		tx.BookISBN, tx.BookTitle, tx.BookAuthor,
 		tx.BorrowedAt, tx.DueAt, tx.ReturnedAt, string(tx.Status),
-		fineAmountDecimal(tx.FineAmountCents), tx.LateDays, tx.StockEventID,
+		tx.FineAmountCents, tx.LateDays, tx.StockEventID,
 		tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
@@ -64,14 +64,14 @@ func (r *TransactionRepository) CreateBorrowWithOutbox(ctx context.Context, tx *
 	}
 
 	query := `
-		INSERT INTO borrow_transactions (id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount, late_days, stock_event_id, created_at, updated_at)
+		INSERT INTO borrow_transactions (id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 	if _, err := dbtx.Exec(ctx, query,
 		tx.ID, tx.TransactionRef, tx.UserID, tx.BookID,
 		tx.BookISBN, tx.BookTitle, tx.BookAuthor,
 		tx.BorrowedAt, tx.DueAt, tx.ReturnedAt, string(tx.Status),
-		fineAmountDecimal(tx.FineAmountCents), tx.LateDays, tx.StockEventID,
+		tx.FineAmountCents, tx.LateDays, tx.StockEventID,
 		tx.CreatedAt, tx.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
@@ -83,14 +83,14 @@ func (r *TransactionRepository) CreateBorrowWithOutbox(ctx context.Context, tx *
 	}
 
 	if err := dbtx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("failed to commit borrow transaction: %w", err)
 	}
 	return nil
 }
 
 func (r *TransactionRepository) FindByID(ctx context.Context, id string) (*domain.BorrowTransaction, error) {
 	query := `
-		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, (fine_amount * 100)::bigint, late_days, stock_event_id, created_at, updated_at
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
 		FROM borrow_transactions WHERE id = $1
 	`
 
@@ -112,7 +112,7 @@ func (r *TransactionRepository) FindByID(ctx context.Context, id string) (*domai
 
 func (r *TransactionRepository) FindByRef(ctx context.Context, ref string) (*domain.BorrowTransaction, error) {
 	query := `
-		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, (fine_amount * 100)::bigint, late_days, stock_event_id, created_at, updated_at
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
 		FROM borrow_transactions WHERE transaction_ref = $1
 	`
 
@@ -134,11 +134,11 @@ func (r *TransactionRepository) FindByRef(ctx context.Context, ref string) (*dom
 
 func (r *TransactionRepository) Update(ctx context.Context, tx *domain.BorrowTransaction) error {
 	query := `
-		UPDATE borrow_transactions SET returned_at = $2, status = $3, fine_amount = $4, late_days = $5, stock_event_id = $6, updated_at = $7
+		UPDATE borrow_transactions SET returned_at = $2, status = $3, fine_amount_cents = $4, late_days = $5, stock_event_id = $6, updated_at = $7
 		WHERE id = $1
 	`
 	_, err := r.pool.Exec(ctx, query,
-		tx.ID, tx.ReturnedAt, string(tx.Status), fineAmountDecimal(tx.FineAmountCents),
+		tx.ID, tx.ReturnedAt, string(tx.Status), tx.FineAmountCents,
 		tx.LateDays, tx.StockEventID, tx.UpdatedAt,
 	)
 	if err != nil {
@@ -159,11 +159,11 @@ func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx
 	defer func() { _ = dbtx.Rollback(ctx) }()
 
 	query := `
-		UPDATE borrow_transactions SET returned_at = $3, status = $4, fine_amount = $5, late_days = $6, stock_event_id = $7, updated_at = $8
+		UPDATE borrow_transactions SET returned_at = $3, status = $4, fine_amount_cents = $5, late_days = $6, stock_event_id = $7, updated_at = $8
 		WHERE id = $1 AND user_id = $2 AND status = 'ACTIVE'
 	`
 	result, err := dbtx.Exec(ctx, query,
-		tx.ID, tx.UserID, tx.ReturnedAt, string(tx.Status), fineAmountDecimal(tx.FineAmountCents),
+		tx.ID, tx.UserID, tx.ReturnedAt, string(tx.Status), tx.FineAmountCents,
 		tx.LateDays, tx.StockEventID, tx.UpdatedAt,
 	)
 	if err != nil {
@@ -179,27 +179,47 @@ func (r *TransactionRepository) ReturnIfActiveWithOutbox(ctx context.Context, tx
 	}
 
 	if err := dbtx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("failed to commit return transaction: %w", err)
 	}
 	return nil
 }
 
 func insertStockEventOutbox(ctx context.Context, execer dbExecer, outbox *domain.StockEventOutbox) error {
 	query := `
-		INSERT INTO stock_event_outbox (id, event_type, transaction_id, transaction_ref, user_id, book_id, quantity, status, attempts, next_attempt_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO stock_event_outbox (id, event_type, transaction_id, transaction_ref, compensation_for_event_type, compensation_reason, user_id, book_id, quantity, status, attempts, next_attempt_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (transaction_id, event_type) DO NOTHING
 	`
 	_, err := execer.Exec(ctx, query,
-		outbox.ID, outbox.EventType, outbox.TransactionID, outbox.TransactionRef, outbox.UserID, outbox.BookID,
+		outbox.ID, outbox.EventType, outbox.TransactionID, outbox.TransactionRef,
+		outbox.CompensationForEventType, outbox.CompensationReason,
+		outbox.UserID, outbox.BookID,
 		outbox.Quantity, string(outbox.Status), outbox.Attempts, outbox.NextAttemptAt, outbox.CreatedAt, outbox.UpdatedAt,
 	)
 	return err
 }
 
+func (r *TransactionRepository) EnqueueStockEvent(ctx context.Context, outbox *domain.StockEventOutbox) error {
+	if err := insertStockEventOutbox(ctx, r.pool, outbox); err != nil {
+		return fmt.Errorf("failed to enqueue stock event outbox: %w", err)
+	}
+	return nil
+}
+
+func (r *TransactionRepository) UpdateStockEventID(ctx context.Context, id, stockEventID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE borrow_transactions SET stock_event_id = $2, updated_at = NOW() WHERE id = $1`,
+		id, stockEventID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update stock_event_id: %w", err)
+	}
+	return nil
+}
+
 func (r *TransactionRepository) FindActiveByUser(ctx context.Context, userID string) ([]domain.BorrowTransaction, error) {
 	query := `
-		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, (fine_amount * 100)::bigint, late_days, stock_event_id, created_at, updated_at
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
 		FROM borrow_transactions WHERE user_id = $1 AND status = 'ACTIVE'
 		ORDER BY borrowed_at DESC
 	`
@@ -250,7 +270,7 @@ func (r *TransactionRepository) GetHistory(ctx context.Context, userID string, p
 
 	offset := (page - 1) * perPage
 	query := `
-		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, (fine_amount * 100)::bigint, late_days, stock_event_id, created_at, updated_at
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
 		FROM borrow_transactions WHERE user_id = $1
 		ORDER BY created_at DESC LIMIT $2 OFFSET $3
 	`
@@ -289,7 +309,7 @@ func (r *TransactionRepository) ListAll(ctx context.Context, page, perPage int) 
 
 	offset := (page - 1) * perPage
 	query := `
-		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, (fine_amount * 100)::bigint, late_days, stock_event_id, created_at, updated_at
+		SELECT id, transaction_ref, user_id, book_id, book_isbn, book_title, book_author, borrowed_at, due_at, returned_at, status, fine_amount_cents, late_days, stock_event_id, created_at, updated_at
 		FROM borrow_transactions
 		ORDER BY created_at DESC LIMIT $1 OFFSET $2
 	`
@@ -317,8 +337,4 @@ func (r *TransactionRepository) ListAll(ctx context.Context, page, perPage int) 
 	}
 
 	return txs, total, nil
-}
-
-func fineAmountDecimal(cents int64) string {
-	return fmt.Sprintf("%d.%02d", cents/100, cents%100)
 }

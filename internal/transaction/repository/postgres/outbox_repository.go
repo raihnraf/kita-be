@@ -44,7 +44,8 @@ func (r *StockEventOutboxRepository) ClaimDue(ctx context.Context, limit int) ([
 		SET status = 'PROCESSING', attempts = attempts + 1, updated_at = NOW()
 		FROM due
 		WHERE o.id = due.id
-		RETURNING o.id, o.event_type, o.transaction_id, o.transaction_ref, o.user_id, o.book_id, o.quantity,
+		RETURNING o.id, o.event_type, o.transaction_id, o.transaction_ref, o.compensation_for_event_type, o.compensation_reason,
+			o.user_id, o.book_id, o.quantity,
 			o.status, o.attempts, o.last_error, o.next_attempt_at, o.published_at, o.created_at, o.updated_at
 	`
 	rows, err := dbtx.Query(ctx, query, limit)
@@ -91,8 +92,9 @@ func scanOutboxRows(rows pgx.Rows) ([]domain.StockEventOutbox, error) {
 		var event domain.StockEventOutbox
 		var status string
 		if err := rows.Scan(
-			&event.ID, &event.EventType, &event.TransactionID, &event.TransactionRef, &event.UserID,
-			&event.BookID, &event.Quantity, &status, &event.Attempts, &event.LastError,
+			&event.ID, &event.EventType, &event.TransactionID, &event.TransactionRef,
+			&event.CompensationForEventType, &event.CompensationReason,
+			&event.UserID, &event.BookID, &event.Quantity, &status, &event.Attempts, &event.LastError,
 			&event.NextAttemptAt, &event.PublishedAt, &event.CreatedAt, &event.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan outbox event: %w", err)

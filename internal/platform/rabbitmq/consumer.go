@@ -14,17 +14,19 @@ import (
 type MessageHandler func(msg Message) error
 
 type Message struct {
-	EventID        string `json:"event_id"`
-	EventType      string `json:"event_type"`
-	TransactionID  string `json:"transaction_id"`
-	TransactionRef string `json:"transaction_ref"`
-	UserID         string `json:"user_id"`
-	BookID         string `json:"book_id"`
-	Quantity       int    `json:"quantity"`
-	OccurredAt     string `json:"occurred_at"`
-	IdempotencyKey string `json:"idempotency_key"`
-	RetryCount     int32  `json:"-"`
-	DeliveryTag    uint64 `json:"-"`
+	EventID                  string `json:"event_id"`
+	EventType                string `json:"event_type"`
+	TransactionID            string `json:"transaction_id"`
+	TransactionRef           string `json:"transaction_ref"`
+	CompensationForEventType string `json:"compensation_for_event_type,omitempty"`
+	CompensationReason       string `json:"compensation_reason,omitempty"`
+	UserID                   string `json:"user_id"`
+	BookID                   string `json:"book_id"`
+	Quantity                 int    `json:"quantity"`
+	OccurredAt               string `json:"occurred_at"`
+	IdempotencyKey           string `json:"idempotency_key"`
+	RetryCount               int32  `json:"-"`
+	DeliveryTag              uint64 `json:"-"`
 }
 
 type Consumer struct {

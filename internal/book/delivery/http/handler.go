@@ -42,7 +42,7 @@ func (h *BookHandler) List(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	category := c.Query("category", "")
 
-	output, err := h.listBooks.Execute(c.Context(), usecase.ListBooksInput{
+	output, err := h.listBooks.Execute(c.UserContext(), usecase.ListBooksInput{
 		Search:   search,
 		Category: category,
 		Page:     page,
@@ -76,7 +76,7 @@ func (h *BookHandler) Get(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "book id must be a valid UUID")
 	}
 
-	book, err := h.getBook.Execute(c.Context(), id)
+	book, err := h.getBook.Execute(c.UserContext(), id)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (h *BookHandler) Create(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "total_stock must be non-negative")
 	}
 
-	book, err := h.createBook.Execute(c.Context(), usecase.CreateBookInput{
+	book, err := h.createBook.Execute(c.UserContext(), usecase.CreateBookInput{
 		ISBN:        req.ISBN,
 		Title:       req.Title,
 		Author:      req.Author,
@@ -127,7 +127,7 @@ func (h *BookHandler) Update(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "total_stock must be non-negative")
 	}
 
-	book, err := h.updateBook.Execute(c.Context(), usecase.UpdateBookInput{
+	book, err := h.updateBook.Execute(c.UserContext(), usecase.UpdateBookInput{
 		ID:          id,
 		ISBN:        req.ISBN,
 		Title:       req.Title,
@@ -150,7 +150,7 @@ func (h *BookHandler) Availability(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "book id must be a valid UUID")
 	}
 
-	output, err := h.stock.CheckAvailability(c.Context(), id)
+	output, err := h.stock.CheckAvailability(c.UserContext(), id)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (h *BookHandler) InternalDecreaseStock(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction_id must be a valid UUID")
 	}
 
-	event, err := h.stock.DecreaseStock(c.Context(), id, req.Quantity, req.TransactionID)
+	event, err := h.stock.DecreaseStock(c.UserContext(), id, req.Quantity, req.TransactionID)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (h *BookHandler) InternalIncreaseStock(c *fiber.Ctx) error {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction_id must be a valid UUID")
 	}
 
-	event, err := h.stock.IncreaseStock(c.Context(), id, req.Quantity, req.TransactionID)
+	event, err := h.stock.IncreaseStock(c.UserContext(), id, req.Quantity, req.TransactionID)
 	if err != nil {
 		return err
 	}

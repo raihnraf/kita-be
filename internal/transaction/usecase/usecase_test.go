@@ -13,8 +13,10 @@ import (
 )
 
 type fakeTxnRepo struct {
-	txns   map[string]*domain.BorrowTransaction
-	outbox map[string]*domain.StockEventOutbox
+	txns            map[string]*domain.BorrowTransaction
+	outbox          map[string]*domain.StockEventOutbox
+	createBorrowErr error
+	returnActiveErr error
 }
 
 func newFakeTxnRepo() *fakeTxnRepo {
@@ -31,6 +33,9 @@ func (r *fakeTxnRepo) CreateIfUserBelowActiveLimit(ctx context.Context, tx *doma
 }
 
 func (r *fakeTxnRepo) CreateBorrowWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, maxActive int, outbox *domain.StockEventOutbox) error {
+	if r.createBorrowErr != nil {
+		return r.createBorrowErr
+	}
 	activeCount, err := r.CountActiveByUser(ctx, tx.UserID)
 	if err != nil {
 		return err
@@ -42,6 +47,11 @@ func (r *fakeTxnRepo) CreateBorrowWithOutbox(ctx context.Context, tx *domain.Bor
 	if outbox != nil {
 		r.outbox[outbox.ID] = outbox
 	}
+	return nil
+}
+
+func (r *fakeTxnRepo) EnqueueStockEvent(ctx context.Context, outbox *domain.StockEventOutbox) error {
+	r.outbox[outbox.ID] = outbox
 	return nil
 }
 
@@ -69,11 +79,23 @@ func (r *fakeTxnRepo) Update(ctx context.Context, tx *domain.BorrowTransaction) 
 	return nil
 }
 
+func (r *fakeTxnRepo) UpdateStockEventID(ctx context.Context, id, stockEventID string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	tx.StockEventID = &stockEventID
+	return nil
+}
+
 func (r *fakeTxnRepo) ReturnIfActive(ctx context.Context, tx *domain.BorrowTransaction) error {
 	return r.ReturnIfActiveWithOutbox(ctx, tx, nil)
 }
 
 func (r *fakeTxnRepo) ReturnIfActiveWithOutbox(ctx context.Context, tx *domain.BorrowTransaction, outbox *domain.StockEventOutbox) error {
+	if r.returnActiveErr != nil {
+		return r.returnActiveErr
+	}
 	existing, ok := r.txns[tx.ID]
 	if !ok || existing.UserID != tx.UserID || existing.Status != domain.TransactionActive {
 		return domain.ErrTransactionNotActive
@@ -205,7 +227,9 @@ func (r *fakeIdempotencyRepo) GetRecord(ctx context.Context, scope, key string) 
 }
 
 type fakeBookClient struct {
-	stock map[string]int
+	stock        map[string]int
+	failIncrease bool
+	failDecrease bool
 }
 
 func newFakeBookClient() *fakeBookClient {
@@ -213,6 +237,9 @@ func newFakeBookClient() *fakeBookClient {
 }
 
 func (c *fakeBookClient) DecreaseStock(ctx context.Context, bookID string, qty int, txnID string) (string, error) {
+	if c.failDecrease {
+		return "", fmt.Errorf("decrease failed")
+	}
 	current := c.stock[bookID]
 	if current < qty {
 		return "", fmt.Errorf("insufficient stock")
@@ -230,6 +257,9 @@ func (c *fakeBookClient) GetBook(ctx context.Context, bookID string) (*domain.Bo
 }
 
 func (c *fakeBookClient) IncreaseStock(ctx context.Context, bookID string, qty int, txnID string) (string, error) {
+	if c.failIncrease {
+		return "", fmt.Errorf("increase failed")
+	}
 	c.stock[bookID] += qty
 	return uuid.New().String(), nil
 }
@@ -420,6 +450,68 @@ func TestBorrowEnqueuesStockDecreaseOutbox(t *testing.T) {
 	for _, event := range txnRepo.outbox {
 		if event.EventType != "DECREASE" || event.TransactionID != output.Transaction.ID || event.BookID != "book-1" {
 			t.Fatalf("unexpected outbox event: %+v", event)
+		}
+	}
+}
+
+func TestBorrowCompensatesStockWhenCreateFails(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	txnRepo.createBorrowErr = domain.ErrActiveBorrowLimitReached
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 1)
+
+	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+
+	_, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err == nil {
+		t.Fatal("expected borrow to fail")
+	}
+	if bookClient.stock["book-1"] != 1 {
+		t.Fatalf("expected stock to be restored after compensation, got %d", bookClient.stock["book-1"])
+	}
+	if len(txnRepo.txns) != 0 {
+		t.Fatalf("expected no transaction to be persisted, got %d", len(txnRepo.txns))
+	}
+	if len(txnRepo.outbox) != 0 {
+		t.Fatalf("expected no fallback outbox event when immediate compensation succeeds, got %d", len(txnRepo.outbox))
+	}
+}
+
+func TestBorrowEnqueuesCompensationOutboxWhenImmediateCompensationFails(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	txnRepo.createBorrowErr = domain.ErrActiveBorrowLimitReached
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 1)
+	bookClient.failIncrease = true
+
+	uc := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+
+	_, err := uc.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err == nil {
+		t.Fatal("expected borrow to fail")
+	}
+	if bookClient.stock["book-1"] != 0 {
+		t.Fatalf("expected stock to remain decremented until fallback compensation runs, got %d", bookClient.stock["book-1"])
+	}
+	if len(txnRepo.outbox) != 1 {
+		t.Fatalf("expected 1 fallback compensation outbox event, got %d", len(txnRepo.outbox))
+	}
+	for _, event := range txnRepo.outbox {
+		if event.EventType != "INCREASE" || event.BookID != "book-1" {
+			t.Fatalf("unexpected compensation event: %+v", event)
+		}
+		if event.TransactionID == "" || event.TransactionRef == "" {
+			t.Fatalf("expected compensation event to retain original transaction linkage, got %+v", event)
+		}
+		if event.CompensationForEventType == nil || *event.CompensationForEventType != "DECREASE" {
+			t.Fatalf("expected compensation_for_event_type=DECREASE, got %+v", event)
+		}
+		if event.CompensationReason == nil || *event.CompensationReason != "borrow_create_failed" {
+			t.Fatalf("expected compensation_reason=borrow_create_failed, got %+v", event)
 		}
 	}
 }
@@ -618,6 +710,77 @@ func TestReturnEnqueuesStockIncreaseOutbox(t *testing.T) {
 	}
 	if !sawIncrease {
 		t.Fatalf("expected return to enqueue INCREASE outbox event, got %+v", txnRepo.outbox)
+	}
+}
+
+func TestReturnDoesNotTouchStockWhenUpdateFails(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 0)
+	txnRepo.returnActiveErr = domain.ErrTransactionNotActive
+
+	txn := domain.NewBorrowTransaction(uuid.NewString(), "TXN-1", "user-1", "book-1", time.Now().AddDate(0, 0, -1), time.Now().AddDate(0, 0, 6))
+	txnRepo.txns[txn.ID] = txn
+
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	_, err := returnUC.Execute(context.Background(), usecase.ReturnInput{TransactionID: txn.ID, UserID: "user-1"})
+	if err == nil {
+		t.Fatal("expected return to fail with inactive conflict")
+	}
+	if bookClient.stock["book-1"] != 0 {
+		t.Fatalf("expected stock to remain unchanged when return update fails before stock mutation, got %d", bookClient.stock["book-1"])
+	}
+	if len(txnRepo.outbox) != 0 {
+		t.Fatalf("expected no outbox event when return update fails before commit, got %d", len(txnRepo.outbox))
+	}
+}
+
+func TestReturnLeavesCommittedOutboxForRetryWhenImmediateIncreaseFails(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+	bookClient.failIncrease = true
+
+	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+	borrowOutput, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed, got: %v", err)
+	}
+
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	output, err := returnUC.Execute(context.Background(), usecase.ReturnInput{TransactionID: borrowOutput.Transaction.ID, UserID: "user-1"})
+	if err == nil {
+		if output == nil {
+			t.Fatal("expected return output when immediate stock increase fails")
+		}
+	}
+	if err != nil {
+		t.Fatalf("expected return to succeed and rely on outbox retry, got: %v", err)
+	}
+	if bookClient.stock["book-1"] != 2 {
+		t.Fatalf("expected stock to remain at borrowed level until outbox retry runs, got %d", bookClient.stock["book-1"])
+	}
+	var sawIncrease bool
+	for _, event := range txnRepo.outbox {
+		if event.EventType == "INCREASE" && event.TransactionID == borrowOutput.Transaction.ID && event.BookID == "book-1" {
+			sawIncrease = true
+			if event.CompensationReason != nil || event.CompensationForEventType != nil {
+				t.Fatalf("expected normal return outbox event without compensation metadata, got %+v", event)
+			}
+		}
+	}
+	if !sawIncrease {
+		t.Fatalf("expected committed return outbox event for retry, got %+v", txnRepo.outbox)
+	}
+	if borrowOutput.Transaction.StockEventID == nil {
+		t.Fatal("expected borrow output to carry original stock_event_id")
+	}
+	if output.Transaction.StockEventID == nil || *output.Transaction.StockEventID != *borrowOutput.Transaction.StockEventID {
+		t.Fatalf("expected stock_event_id to remain at the original borrow event until retry succeeds, got %+v", output.Transaction.StockEventID)
 	}
 }
 

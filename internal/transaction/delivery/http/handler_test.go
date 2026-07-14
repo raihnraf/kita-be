@@ -293,6 +293,11 @@ func (r *handlerFakeTxnRepo) CreateBorrowWithOutbox(ctx context.Context, tx *dom
 	return nil
 }
 
+func (r *handlerFakeTxnRepo) EnqueueStockEvent(ctx context.Context, outbox *domain.StockEventOutbox) error {
+	r.outbox[outbox.ID] = outbox
+	return nil
+}
+
 func (r *handlerFakeTxnRepo) FindByID(ctx context.Context, id string) (*domain.BorrowTransaction, error) {
 	tx, ok := r.txns[id]
 	if !ok {
@@ -314,6 +319,15 @@ func (r *handlerFakeTxnRepo) FindByRef(ctx context.Context, ref string) (*domain
 
 func (r *handlerFakeTxnRepo) Update(ctx context.Context, tx *domain.BorrowTransaction) error {
 	r.txns[tx.ID] = tx
+	return nil
+}
+
+func (r *handlerFakeTxnRepo) UpdateStockEventID(ctx context.Context, id, stockEventID string) error {
+	tx, ok := r.txns[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	tx.StockEventID = &stockEventID
 	return nil
 }
 
