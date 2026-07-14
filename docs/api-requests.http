@@ -151,7 +151,12 @@ Authorization: Bearer {{access_token}}
 
 ### Return a Book
 POST {{base_transaction}}/api/v1/transactions/{{transaction_id}}/return
+Content-Type: application/json
 Authorization: Bearer {{access_token}}
+
+{
+  "idempotency_key": "uuid-generated-by-client-for-return"
+}
 
 ### Get Transaction History
 GET {{base_transaction}}/api/v1/transactions/history?page=1&per_page=10
@@ -180,4 +185,9 @@ Authorization: Bearer {{access_token}}
 
 ### Try returning another user's transaction
 POST {{base_transaction}}/api/v1/transactions/{{transaction_id}}/return
+Content-Type: application/json
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoib3RoZXItdXNlciIsImVtYWlsIjoib3RoZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiTUVNQkVSIiwiaXNzIjoia2l0YS1pZGVudGl0eS1zZXJ2aWNlIn0.test
+
+{
+  "idempotency_key": "uuid-generated-by-client-for-return"
+}

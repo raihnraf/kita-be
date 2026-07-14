@@ -10,7 +10,7 @@ type BorrowRequest struct {
 }
 
 type ReturnRequest struct {
-	UserID string `json:"user_id"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type TransactionResponse struct {

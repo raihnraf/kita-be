@@ -64,14 +64,23 @@ func (h *TransactionHandler) Return(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "UNAUTHORIZED", "invalid token")
 	}
 
+	var req ReturnRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, "INVALID_REQUEST", "invalid request body")
+	}
+	if req.IdempotencyKey == "" {
+		return response.BadRequest(c, "VALIDATION_ERROR", "idempotency_key is required")
+	}
+
 	txnID := c.Params("id")
 	if !validation.UUID(txnID) {
 		return response.BadRequest(c, "VALIDATION_ERROR", "transaction id must be a valid UUID")
 	}
 
 	output, err := h.return_.Execute(c.Context(), usecase.ReturnInput{
-		TransactionID: txnID,
-		UserID:        userID,
+		TransactionID:  txnID,
+		UserID:         userID,
+		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
 		return err

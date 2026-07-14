@@ -116,7 +116,8 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 		t.Fatalf("expected stock 1 after borrow, got %d", got)
 	}
 
-	returnReq := httptest.NewRequest(fiber.MethodPost, "/transactions/"+borrowBody.Data.ID+"/return", nil)
+	returnReq := httptest.NewRequest(fiber.MethodPost, "/transactions/"+borrowBody.Data.ID+"/return", strings.NewReader(`{"idempotency_key":"return-1"}`))
+	returnReq.Header.Set("Content-Type", "application/json")
 	returnResp, err := app.Test(returnReq)
 	if err != nil {
 		t.Fatalf("expected no return error, got %v", err)
@@ -140,6 +141,52 @@ func TestTransactionHandlerBorrowThenReturnFlow(t *testing.T) {
 	}
 	if got := deps.bookClient.stock[testBookID]; got != 2 {
 		t.Fatalf("expected stock restored to 2, got %d", got)
+	}
+}
+
+func TestTransactionHandlerReturnRequiresIdempotencyKey(t *testing.T) {
+	app, deps := newTransactionTestApp(testUserID)
+	txn := deps.txnRepo.addTransaction(testUserID, testBookID)
+
+	returnReq := httptest.NewRequest(fiber.MethodPost, "/transactions/"+txn.ID+"/return", strings.NewReader(`{}`))
+	returnReq.Header.Set("Content-Type", "application/json")
+
+	returnResp, err := app.Test(returnReq)
+	if err != nil {
+		t.Fatalf("expected no return error, got %v", err)
+	}
+	if returnResp.StatusCode != fiber.StatusBadRequest {
+		t.Fatalf("expected return status %d, got %d", fiber.StatusBadRequest, returnResp.StatusCode)
+	}
+}
+
+func TestTransactionHandlerReturnReplaysCompletedIdempotencyKey(t *testing.T) {
+	app, deps := newTransactionTestApp(testUserID)
+	deps.bookClient.setStock(testBookID, 1)
+	txn := deps.txnRepo.addTransaction(testUserID, testBookID)
+
+	body := `{"idempotency_key":"return-replay-1"}`
+	returnReq1 := httptest.NewRequest(fiber.MethodPost, "/transactions/"+txn.ID+"/return", strings.NewReader(body))
+	returnReq1.Header.Set("Content-Type", "application/json")
+	returnResp1, err := app.Test(returnReq1)
+	if err != nil {
+		t.Fatalf("expected no first return error, got %v", err)
+	}
+	if returnResp1.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected first return status %d, got %d", fiber.StatusOK, returnResp1.StatusCode)
+	}
+
+	returnReq2 := httptest.NewRequest(fiber.MethodPost, "/transactions/"+txn.ID+"/return", strings.NewReader(body))
+	returnReq2.Header.Set("Content-Type", "application/json")
+	returnResp2, err := app.Test(returnReq2)
+	if err != nil {
+		t.Fatalf("expected no replay return error, got %v", err)
+	}
+	if returnResp2.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected replay return status %d, got %d", fiber.StatusOK, returnResp2.StatusCode)
+	}
+	if got := deps.bookClient.stock[testBookID]; got != 2 {
+		t.Fatalf("expected stock increased exactly once, got %d", got)
 	}
 }
 

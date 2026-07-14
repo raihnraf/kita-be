@@ -236,6 +236,12 @@ paths:
       summary: Check whether a book can be borrowed
       parameters:
         - $ref: '#/components/parameters/ID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequest'
       responses:
         '200':
           description: Book availability
@@ -856,6 +862,12 @@ components:
         book_id:
           type: string
           format: uuid
+        idempotency_key:
+          type: string
+    ReturnRequest:
+      type: object
+      required: [idempotency_key]
+      properties:
         idempotency_key:
           type: string
     Transaction:

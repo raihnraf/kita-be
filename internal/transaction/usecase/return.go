@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -43,8 +45,9 @@ func (uc *ReturnUsecase) SetEventPublisher(publisher StockEventPublisher) {
 }
 
 type ReturnInput struct {
-	TransactionID string
-	UserID        string
+	TransactionID  string
+	UserID         string
+	IdempotencyKey string
 }
 
 type ReturnOutput struct {
@@ -52,6 +55,27 @@ type ReturnOutput struct {
 }
 
 func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*ReturnOutput, error) {
+	if input.IdempotencyKey != "" {
+		requestHash := hashReturnRequest(input.UserID, input.TransactionID, input.IdempotencyKey)
+		isDuplicate, err := uc.idempotencyRepo.CheckOrCreate(ctx, "return", input.IdempotencyKey, requestHash)
+		if err != nil {
+			logger.Warn("return idempotency check failed", "user_id", input.UserID, "transaction_id", input.TransactionID, "error", err.Error())
+			return nil, apperror.Conflict("idempotency key conflicts with another request")
+		}
+		if isDuplicate {
+			rec, err := uc.idempotencyRepo.GetRecord(ctx, "return", input.IdempotencyKey)
+			if err == nil && rec != nil {
+				if rec.Status == "COMPLETED" && len(rec.ResponsePayload) > 0 {
+					var tx domain.BorrowTransaction
+					if err := json.Unmarshal(rec.ResponsePayload, &tx); err == nil {
+						return &ReturnOutput{Transaction: &tx}, nil
+					}
+				}
+			}
+			return nil, apperror.Conflict("duplicate request")
+		}
+	}
+
 	txn, err := uc.txnRepo.FindByID(ctx, input.TransactionID)
 	if err != nil {
 		return nil, apperror.NotFound("transaction not found")
@@ -123,5 +147,18 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 		}()
 	}
 
+	if input.IdempotencyKey != "" {
+		payload, err := json.Marshal(txn)
+		if err == nil {
+			_ = uc.idempotencyRepo.SaveResponse(ctx, "return", input.IdempotencyKey, payload)
+		}
+	}
+
 	return &ReturnOutput{Transaction: txn}, nil
+}
+
+func hashReturnRequest(userID, transactionID, key string) string {
+	data := fmt.Sprintf("%s:%s:%s", userID, transactionID, key)
+	h := sha256.Sum256([]byte(data))
+	return fmt.Sprintf("%x", h)
 }

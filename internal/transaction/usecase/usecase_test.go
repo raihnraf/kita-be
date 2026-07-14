@@ -471,6 +471,85 @@ func TestReturnLateCreatesFine(t *testing.T) {
 	}
 }
 
+func TestReturnIdempotencyReplaysCompleted(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+
+	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+	borrowOutput, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{
+		UserID: "user-1",
+		BookID: "book-1",
+	})
+	if err != nil {
+		t.Fatalf("expected borrow to succeed, got: %v", err)
+	}
+
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	out1, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
+		TransactionID:  borrowOutput.Transaction.ID,
+		UserID:         "user-1",
+		IdempotencyKey: "return-key-1",
+	})
+	if err != nil {
+		t.Fatalf("expected first return to succeed, got: %v", err)
+	}
+	out2, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
+		TransactionID:  borrowOutput.Transaction.ID,
+		UserID:         "user-1",
+		IdempotencyKey: "return-key-1",
+	})
+	if err != nil {
+		t.Fatalf("expected duplicate completed return to replay, got: %v", err)
+	}
+
+	if out1.Transaction.ID != out2.Transaction.ID {
+		t.Fatalf("expected replayed transaction ID %s, got %s", out1.Transaction.ID, out2.Transaction.ID)
+	}
+	if bookClient.stock["book-1"] != 3 {
+		t.Fatalf("expected stock restored exactly once to 3, got %d", bookClient.stock["book-1"])
+	}
+}
+
+func TestReturnIdempotencyDifferentTransactionRejected(t *testing.T) {
+	txnRepo := newFakeTxnRepo()
+	auditRepo := newFakeAuditRepo()
+	idempRepo := newFakeIdempotencyRepo()
+	bookClient := newFakeBookClient()
+	bookClient.setStock("book-1", 3)
+	bookClient.setStock("book-2", 3)
+
+	borrowUC := usecase.NewBorrowUsecase(txnRepo, auditRepo, idempRepo, bookClient, 3, 7)
+	borrow1, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("expected first borrow to succeed, got: %v", err)
+	}
+	borrow2, err := borrowUC.Execute(context.Background(), usecase.BorrowInput{UserID: "user-1", BookID: "book-2"})
+	if err != nil {
+		t.Fatalf("expected second borrow to succeed, got: %v", err)
+	}
+
+	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempRepo, bookClient, usecase.NewFineCalculator(50000))
+	if _, err := returnUC.Execute(context.Background(), usecase.ReturnInput{
+		TransactionID:  borrow1.Transaction.ID,
+		UserID:         "user-1",
+		IdempotencyKey: "return-key-1",
+	}); err != nil {
+		t.Fatalf("expected first return to succeed, got: %v", err)
+	}
+
+	_, err = returnUC.Execute(context.Background(), usecase.ReturnInput{
+		TransactionID:  borrow2.Transaction.ID,
+		UserID:         "user-1",
+		IdempotencyKey: "return-key-1",
+	})
+	if err == nil {
+		t.Fatal("expected same return idempotency key with different transaction to be rejected")
+	}
+}
+
 func TestReturnWrongUser(t *testing.T) {
 	txnRepo := newFakeTxnRepo()
 	auditRepo := newFakeAuditRepo()

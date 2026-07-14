@@ -53,14 +53,14 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 
 Selain fitur wajib dan nilai plus dari soal, backend ini juga menambahkan beberapa detail engineering agar sistem lebih aman saat retry, concurrency, dan integrasi antar service.
 
-- **Idempotency dengan response replay**: request peminjaman yang dikirim ulang dengan `idempotency_key` yang sama dapat mengembalikan response awal, sehingga retry dari client lebih aman dan tidak membuat transaksi ganda.
+- **Idempotency dengan response replay**: request peminjaman dan pengembalian yang dikirim ulang dengan `idempotency_key` yang sama dapat mengembalikan response awal, sehingga retry dari client lebih aman dan tidak membuat transaksi atau mutasi stok ganda.
 - **Advisory lock untuk race condition borrow**: pengecekan limit pinjam aktif dan pembuatan transaksi dibungkus dengan PostgreSQL advisory lock per user agar request paralel tidak bisa melewati batas maksimal 3 buku.
 - **Stock event idempotency**: constraint unik `(transaction_id, event_type)` pada `book_stock_events` memastikan stok tidak berubah dua kali untuk event transaksi yang sama, meskipun RabbitMQ mengirim duplicate message.
 - **RabbitMQ publisher confirms**: publisher menunggu `ack` dari broker sebelum dianggap berhasil, sehingga kegagalan publish bisa terdeteksi dan dilog.
 - **RabbitMQ consumer reconnect loop**: consumer otomatis reconnect dengan exponential backoff saat broker bermasalah, tanpa harus restart worker secara manual.
 - **Dead Letter Queue**: message yang tetap gagal setelah retry tidak hilang diam-diam, tetapi masuk ke DLQ agar bisa diperiksa.
 - **Integer cents untuk uang**: denda disimpan dan dihitung sebagai integer cents (`fine_amount_cents`), bukan floating-point, agar perhitungan uang tidak terkena error pembulatan.
-- **Double-return protection**: proses return memakai conditional update; transaksi yang sudah dikembalikan tidak bisa dikembalikan ulang dan stok tidak bertambah dua kali.
+- **Double-return protection**: proses return memakai idempotency replay, conditional update, dan stock event idempotency; transaksi yang sudah dikembalikan tidak bisa menaikkan stok dua kali.
 - **Book snapshot saat borrow**: judul, penulis, dan ISBN disimpan ke transaksi saat peminjaman, sehingga history tetap stabil meskipun data buku berubah dan tidak perlu query Book Service per baris history.
 - **Token type enforcement**: JWT membawa field `token_type`, sehingga access token dan refresh token tidak bisa saling tertukar penggunaannya.
 - **Rate limiting**: endpoint auth dan write transaction dibatasi dengan Fiber rate limiter untuk mengurangi brute force dan request spam.
@@ -193,11 +193,11 @@ Jalankan service di terminal terpisah dengan konfigurasi database dan port masin
 ```bash
 SERVER_PORT=3000 DB_NAME=kita_identity make run-identity
 SERVER_PORT=3001 DB_NAME=kita_book RABBITMQ_URL= make run-book
-SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001 RABBITMQ_URL= make run-transaction
+SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001 RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-transaction
 DB_NAME=kita_book RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-worker
 ```
 
-Catatan: `RABBITMQ_URL` sengaja dikosongkan pada `book-api` dan `transaction-api` untuk mode sync/demo agar tidak terjadi mutasi stok ganda; RabbitMQ hanya diperlukan oleh `book-worker` saat jalur async diaktifkan.
+Catatan: `book-api` tetap memakai `RABBITMQ_URL` kosong karena mutasi stok utama berjalan melalui HTTP internal. `transaction-api` dapat mengaktifkan RabbitMQ publisher; duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
 
 Perintah Makefile yang tersedia:
 
@@ -276,7 +276,7 @@ Dokumentasi lengkap tersedia di:
 | Method | Endpoint | Auth | Fungsi |
 |---|---|---|---|
 | `POST` | `/api/v1/transactions/borrow` | JWT | Meminjam buku |
-| `POST` | `/api/v1/transactions/:id/return` | JWT | Mengembalikan buku |
+| `POST` | `/api/v1/transactions/:id/return` | JWT | Mengembalikan buku; body wajib menyertakan `idempotency_key` |
 | `GET` | `/api/v1/transactions/history` | JWT | Melihat riwayat transaksi |
 | `GET` | `/api/v1/transactions/active` | JWT | Melihat buku yang sedang dipinjam |
 | `GET` | `/api/v1/transactions/:id` | JWT | Detail transaksi |
@@ -363,7 +363,9 @@ curl http://localhost:3002/api/v1/transactions/active \
 
 ```bash
 curl -X POST http://localhost:3002/api/v1/transactions/<transaction_id>/return \
-  -H "Authorization: Bearer <access_token>"
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"idempotency_key":"demo-return-1"}'
 ```
 
 ### 8. Lihat Riwayat
@@ -506,7 +508,7 @@ Endpoint utama untuk mobile:
 | Katalog buku | `GET /api/v1/books` |
 | Detail dan stok buku | `GET /api/v1/books/:id`, `GET /api/v1/books/:id/availability` |
 | Peminjaman | `POST /api/v1/transactions/borrow` |
-| Pengembalian | `POST /api/v1/transactions/:id/return` |
+| Pengembalian | `POST /api/v1/transactions/:id/return` dengan body `idempotency_key` |
 | History transaksi | `GET /api/v1/transactions/history` |
 
 Status code penting untuk ditangani aplikasi mobile:
@@ -526,5 +528,5 @@ Status code penting untuk ditangani aplikasi mobile:
 - Repository ini hanya backend, sehingga penilaian UI/UX Flutter berada di repository frontend.
 - Service menggunakan satu instance PostgreSQL dengan database terpisah per service.
 - Tidak ada foreign key lintas service karena referensi antar service dibuat secara logical.
-- Jalur async RabbitMQ tersedia sebagai bonus, tetapi Transaction Service pada Docker Compose default tetap menggunakan jalur HTTP internal untuk update stok utama.
+- Jalur async RabbitMQ tersedia sebagai bonus dan Transaction Service pada Docker Compose default mem-publish event stok. Update stok utama tetap menggunakan HTTP internal; event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)`.
 - Auto-migration Docker berjalan saat volume PostgreSQL masih baru; volume lama perlu migrasi manual.

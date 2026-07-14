@@ -126,11 +126,13 @@ services:
       LOAN_DAYS: "7"
       DAILY_FINE_AMOUNT: "500.0"
       MAX_ACTIVE_BORROWS: "3"
-      RABBITMQ_URL: ""
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
     ports:
       - "3002:3000"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - kita-network

@@ -24,7 +24,7 @@ func TestIdentityHandlerRegisterRejectsInvalidEmail(t *testing.T) {
 	req := httptest.NewRequest(fiber.MethodPost, "/auth/register", strings.NewReader(`{"full_name":"John Doe","email":"bad-email","password":"password123"}`))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -39,7 +39,7 @@ func TestIdentityHandlerRegisterSuccess(t *testing.T) {
 	req := httptest.NewRequest(fiber.MethodPost, "/auth/register", strings.NewReader(`{"full_name":"John Doe","email":"john@example.com","password":"password123"}`))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -73,7 +73,7 @@ func TestIdentityHandlerTokenPasswordGrantSuccess(t *testing.T) {
 	req := httptest.NewRequest(fiber.MethodPost, "/auth/token", strings.NewReader("grant_type=password&email=jane@example.com&password=password123"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -101,7 +101,7 @@ func TestIdentityHandlerProfileRequiresUser(t *testing.T) {
 	app, _ := newIdentityTestApp("")
 
 	req := httptest.NewRequest(fiber.MethodGet, "/users/me", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
