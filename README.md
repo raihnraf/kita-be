@@ -92,7 +92,7 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 |---|---|
 | RabbitMQ | ✅ Untuk event stok buku |
 | Docker Compose | ✅ Menjalankan PostgreSQL, RabbitMQ, dan semua service backend |
-| Unit Testing | ✅ Dapat dijalankan dengan `make test` atau `go test ./...` |
+| Unit Testing | ✅ Tersedia `146` test function di `24` file test; dapat dijalankan dengan `make test` atau `go test ./...` |
 
 ---
 
@@ -551,6 +551,8 @@ go vet ./...
 gofmt -l .
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.0 run
 ```
+
+Saat ini repository memiliki `146` test function di `24` file test.
 
 Area yang ditest mencakup:
 
