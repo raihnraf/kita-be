@@ -91,6 +91,7 @@ func Logger() fiber.Handler {
 			"path", c.Path(),
 			"status", status,
 			"latency_ms", elapsed.Milliseconds(),
+			"latency_bucket", latencyBucket(elapsed.Milliseconds()),
 			"request_id", requestID,
 		}
 
@@ -103,5 +104,20 @@ func Logger() fiber.Handler {
 		}
 
 		return err
+	}
+}
+
+func latencyBucket(ms int64) string {
+	switch {
+	case ms < 10:
+		return "fast"
+	case ms < 50:
+		return "normal"
+	case ms < 200:
+		return "slow"
+	case ms < 1000:
+		return "very_slow"
+	default:
+		return "critical"
 	}
 }

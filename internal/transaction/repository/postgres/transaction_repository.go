@@ -56,6 +56,14 @@ func (r *TransactionRepository) CreateBorrowWithOutbox(ctx context.Context, tx *
 		return fmt.Errorf("failed to lock user active borrows: %w", err)
 	}
 
+	var activeBookCount int
+	if err := dbtx.QueryRow(ctx, `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND book_id = $2 AND status IN ('ACTIVE', 'PENDING', 'RETURN_PENDING')`, tx.UserID, tx.BookID).Scan(&activeBookCount); err != nil {
+		return fmt.Errorf("failed to check active book borrows: %w", err)
+	}
+	if activeBookCount > 0 {
+		return domain.ErrBookAlreadyBorrowed
+	}
+
 	var count int
 	if err := dbtx.QueryRow(ctx, `SELECT COUNT(*) FROM borrow_transactions WHERE user_id = $1 AND status IN ('ACTIVE', 'PENDING', 'RETURN_PENDING')`, tx.UserID).Scan(&count); err != nil {
 		return fmt.Errorf("failed to count active transactions: %w", err)

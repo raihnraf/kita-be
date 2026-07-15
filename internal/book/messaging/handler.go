@@ -3,12 +3,15 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"time"
 
-	bookdomain "kita-be/internal/book/domain"
+	domain "kita-be/internal/book/domain"
 	"kita-be/internal/book/usecase"
 	"kita-be/internal/platform/logger"
 	"kita-be/internal/platform/rabbitmq"
 )
+
+const handlerTimeout = 10 * time.Second
 
 type Handler struct {
 	stockUC   *usecase.StockUsecase
@@ -20,6 +23,9 @@ func NewHandler(stockUC *usecase.StockUsecase, publisher ResultPublisher) *Handl
 }
 
 func (h *Handler) HandleStockEvent(msg rabbitmq.Message) error {
+	ctx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	defer cancel()
+
 	logger.Info("processing stock event",
 		"event_id", msg.EventID,
 		"event_type", msg.EventType,
@@ -34,7 +40,7 @@ func (h *Handler) HandleStockEvent(msg rabbitmq.Message) error {
 
 	switch operation {
 	case "DECREASE":
-		event, err := h.stockUC.DecreaseStockEvent(context.Background(), msg.BookID, msg.Quantity, msg.TransactionID, msg.EventID)
+		event, err := h.stockUC.DecreaseStockEvent(ctx, msg.BookID, msg.Quantity, msg.TransactionID, msg.EventID)
 		if err != nil {
 			logger.Error("stock decrease failed",
 				"event_id", msg.EventID,
@@ -43,12 +49,12 @@ func (h *Handler) HandleStockEvent(msg rabbitmq.Message) error {
 			)
 			return fmt.Errorf("stock decrease failed: %w", err)
 		}
-		if err := h.publishResult(event); err != nil {
+		if err := h.publishResult(ctx, event); err != nil {
 			return err
 		}
 
 	case "INCREASE":
-		event, err := h.stockUC.IncreaseStockEvent(context.Background(), msg.BookID, msg.Quantity, msg.TransactionID, msg.EventID)
+		event, err := h.stockUC.IncreaseStockEvent(ctx, msg.BookID, msg.Quantity, msg.TransactionID, msg.EventID)
 		if err != nil {
 			logger.Error("stock increase failed",
 				"event_id", msg.EventID,
@@ -57,7 +63,7 @@ func (h *Handler) HandleStockEvent(msg rabbitmq.Message) error {
 			)
 			return fmt.Errorf("stock increase failed: %w", err)
 		}
-		if err := h.publishResult(event); err != nil {
+		if err := h.publishResult(ctx, event); err != nil {
 			return err
 		}
 	}
@@ -66,11 +72,11 @@ func (h *Handler) HandleStockEvent(msg rabbitmq.Message) error {
 	return nil
 }
 
-func (h *Handler) publishResult(event *bookdomain.BookStockEvent) error {
+func (h *Handler) publishResult(ctx context.Context, event *domain.BookStockEvent) error {
 	if h.publisher == nil {
 		return fmt.Errorf("result publisher is not configured")
 	}
-	if err := h.publisher.PublishStockResult(context.Background(), event); err != nil {
+	if err := h.publisher.PublishStockResult(ctx, event); err != nil {
 		logger.Error("failed to publish stock result",
 			"event_id", event.EventID,
 			"event_type", event.EventType,

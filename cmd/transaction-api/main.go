@@ -64,11 +64,13 @@ func main() {
 	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempotencyRepo, fineCalc)
 	historyUC := usecase.NewHistoryUsecase(txnRepo, auditRepo)
 
+	var rmqConn *rabbitmq.Connection
 	if cfg.RabbitMQURL == "" {
 		logger.Info("rabbitmq stock event outbox dispatcher disabled")
-	} else if rmqConn, err := connectRabbitMQWithRetry(cfg.RabbitMQURL, 30, 2*time.Second); err != nil {
+	} else if conn, err := connectRabbitMQWithRetry(cfg.RabbitMQURL, 30, 2*time.Second); err != nil {
 		logger.Warn("rabbitmq not available, running without async stock events", "error", err.Error())
 	} else {
+		rmqConn = conn
 		defer rmqConn.Close()
 
 		rmqPublisher := rabbitmq.NewPublisher(rmqConn)
@@ -108,6 +110,11 @@ func main() {
 		}
 		if err := bookClient.Ready(ctx); err != nil {
 			return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "book service is not reachable")
+		}
+		if cfg.RabbitMQURL != "" {
+			if rmqConn == nil || !rmqConn.IsConnected() {
+				return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "rabbitmq is not connected")
+			}
 		}
 
 		return response.OK(c, fiber.Map{

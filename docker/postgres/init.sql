@@ -7,6 +7,9 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kita_book')\gexec
 SELECT 'CREATE DATABASE kita_transaction'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kita_transaction')\gexec
 
+SELECT 'CREATE DATABASE kita_test'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kita_test')\gexec
+
 \connect kita_identity
 \i /migrations/identity/001_create_users.up.sql
 \i /migrations/identity/002_create_refresh_tokens.up.sql

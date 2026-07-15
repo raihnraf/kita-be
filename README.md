@@ -8,10 +8,12 @@ Backend untuk prototipe Sistem Informasi Perpustakaan sesuai `soal.md`.
 
 Repository ini hanya berisi backend. Aplikasi mobile Flutter berada di repository terpisah dan menggunakan backend ini sebagai API server.
 
-## Reviewer Quick Start
+## Reviewer Quick Start (Step-by-Step)
 
-Jika ingin review backend ini dengan cepat, jalankan:
+Untuk memverifikasi backend ini secara cepat dan handal, ikuti langkah-langkah berikut:
 
+### 1. Jalankan Unit & Race Tests
+Pastikan semua unit test, race conditions detector, dan build berjalan bersih di local environment:
 ```bash
 go test ./...
 go test -race ./...
@@ -19,24 +21,35 @@ go build ./...
 docker compose config
 ```
 
-Dokumen primary current untuk reviewer backend:
+### 2. Up & Build Container Environment
+Jalankan dependensi dan API services menggunakan Docker Compose:
+```bash
+docker compose up -d --build
+```
 
-- `BACKEND_SUBMISSION_CHECKLIST.md` untuk jalur review tercepat dan status verifikasi terakhir
-- `BACKEND_DEMO_SCRIPT.md` untuk narasi demo backend 3-5 menit saat submission
-- `SUBMISSION_NARRATIVE.md` untuk alasan desain arsitektur backend
-- `README.md` untuk arsitektur, cara menjalankan, dan mapping ke `soal.md`
-- `docs/openapi.yaml` untuk kontrak API
-- `internal/` untuk implementasi Clean Architecture per service
-- `audit.md` untuk ringkasan verifikasi backend saat ini
-- `audit_final.md` untuk audit akhir arsitektur dan sisa polish yang non-blocking
+### 3. Jalankan Book Seeder
+Seed katalog buku default ke database `kita_book`. Script ini secara otomatis mendeteksi dan mengarahkan koneksi ke database yang tepat:
+```bash
+go run ./scripts/seed.go
+```
 
-Dokumen supporting current dan archived:
+### 4. Jalankan Auto Verification Script
+Uji alur asinkron end-to-end secara penuh (registrasi user baru, login, query buku, borrow async, poll status, return async, poll status, denda):
+```bash
+./scripts/verify_flow.sh
+```
 
-- `UPGRADE_REPORT.md` untuk ringkasan upgrade engineering yang membawa codebase ke state saat ini
-- `VERIFICATION.md` untuk snapshot bukti verifikasi yang lebih panjang
-- `audit_2.md` adalah arsip review pre-fix dan bukan representasi current state
+### 5. Dokumen Navigasi Reviewer
+- [BACKEND_SUBMISSION_CHECKLIST.md](file:///home/raihan/Documents/modela-potentia/kita-be/BACKEND_SUBMISSION_CHECKLIST.md) - Checklist ringkas status verifikasi.
+- [BACKEND_DEMO_SCRIPT.md](file:///home/raihan/Documents/modela-potentia/kita-be/BACKEND_DEMO_SCRIPT.md) - Panduan demo interaktif 3-5 menit.
+- [SUBMISSION_NARRATIVE.md](file:///home/raihan/Documents/modela-potentia/kita-be/SUBMISSION_NARRATIVE.md) - Alasan dan arsitektur keputusan desain.
+- [docs/openapi.yaml](file:///home/raihan/Documents/modela-potentia/kita-be/docs/openapi.yaml) - Spesifikasi/kontrak API OpenAPI 3.
 
-Catatan penting reviewer: endpoint `borrow` dan `return` memang didesain async. Borrow mulai dari `PENDING`, return mulai dari `RETURN_PENDING`, lalu final state dilihat dari endpoint detail transaksi setelah result event diproses. Jika stock restore untuk return ditolak, status transaksi dapat kembali ke `ACTIVE`.
+> [!IMPORTANT]
+> **Asynchronous Saga & Transaction Constraints**:
+> - Endpoint `borrow` dan `return` didesain fully **asynchronous** dan langsung mengembalikan HTTP `202 Accepted` dengan status `PENDING` atau `RETURN_PENDING`.
+> - Status transaksi harus dilihat/dipantau dari endpoint detail transaksi: `GET /api/v1/transactions/{id}`.
+> - Jika stock restore ditolak di worker, status transaksi akan otomatis di-revert kembali ke `ACTIVE`.
 
 ---
 
@@ -247,7 +260,7 @@ SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001
 DB_NAME=kita_book RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-worker
 ```
 
-Catatan: `book-api` tetap memakai `RABBITMQ_URL` kosong karena mutasi stok utama masih memiliki fast path via HTTP internal. `transaction-api` juga menyimpan stock intent ke outbox RabbitMQ agar event yang gagal publish atau butuh retry tetap bisa diproses ulang secara durable, dan duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
+Catatan: `book-api` memakai `RABBITMQ_URL` kosong karena query catalog dan read-paths didesain tanpa koneksi broker langsung, sementara penyesuaian stok dilakukan secara asinkron oleh `book-worker`. `transaction-api` menyimpan stock intent ke outbox RabbitMQ agar event yang gagal publish atau butuh retry tetap bisa diproses ulang secara durable, dan duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
 
 Perintah Makefile yang tersedia:
 
@@ -587,3 +600,81 @@ Status code penting untuk ditangani aplikasi mobile:
 - Tidak ada foreign key lintas service karena referensi antar service dibuat secara logical.
 - Jalur async RabbitMQ tersedia sebagai bonus dan menjadi jalur utama sinkronisasi stok pada Docker Compose default. API borrow mengembalikan transaksi `PENDING`, API return mengembalikan transaksi `RETURN_PENDING`, dan final state transaksi diselesaikan setelah result event dari Book Worker diterima. Event async aman dari mutasi ganda melalui idempotency `(transaction_id, event_type)` dan dapat dipublish ulang oleh reconciliation worker bila result event terlambat.
 - Auto-migration Docker berjalan saat volume PostgreSQL masih baru; volume lama perlu migrasi manual.
+
+---
+
+## Troubleshooting
+
+### Reset Docker Volume dan Re-run Migrasi
+
+Jika database dalam keadaan tidak konsisten setelah perubahan schema atau data corrupt:
+
+```bash
+docker-compose down -v
+docker-compose up -d --build
+```
+
+Flag `-v` menghapus semua volume PostgreSQL dan RabbitMQ, sehingga `init.sql` akan membuat ulang database dan menjalankan migrasi dari awal.
+
+### Cek DLQ RabbitMQ
+
+Message yang gagal diproses setelah retry akan masuk ke Dead Letter Queue. Untuk memeriksa:
+
+1. Buka RabbitMQ Management UI: `http://localhost:15672` (default: `guest`/`guest`)
+2. Navigasi ke **Queues** dan cari `book.stock.commands.dlq` atau `transaction.stock.results.dlq`
+3. Klik queue untuk melihat message yang tertahan
+4. Gunakan **Get Messages** untuk inspect payload
+
+Untuk purge DLQ setelah investigasi:
+
+```bash
+docker-compose exec rabbitmq rabbitmqctl purge_queue "book.stock.commands.dlq"
+```
+
+### Debug Transaksi Stuck di PENDING
+
+Jika transaksi tetap di status `PENDING` atau `RETURN_PENDING` terlalu lama:
+
+1. **Cek Book Worker log:**
+   ```bash
+   docker-compose logs book-worker
+   ```
+   Pastikan worker menerima dan memproses command event.
+
+2. **Cek outbox status di Transaction Service:**
+   ```bash
+   curl http://localhost:3002/api/v1/internal/transactions/<transaction_id>/audits \
+     -H "X-Internal-Token: $INTERNAL_API_TOKEN"
+   ```
+   Lihat apakah outbox entry masih `PENDING` atau sudah `PUBLISHED`.
+
+3. **Cek RabbitMQ queue depth:**
+   Buka `http://localhost:15672` dan cek apakah `book.stock.commands` queue menumpuk.
+
+4. **Reconciliation worker** akan otomatis menandai outbox yang stuck untuk dipublish ulang. Jika perlu trigger manual, restart Book Worker:
+   ```bash
+   docker-compose restart book-worker
+   ```
+
+### Secret Rotation di Production
+
+Sebelum deploy ke production:
+
+1. Generate secret baru:
+   ```bash
+   openssl rand -base64 48  # untuk JWT_SECRET
+   openssl rand -base64 32  # untuk INTERNAL_API_TOKEN
+   ```
+2. Update `.env` dan restart semua service.
+3. Semua refresh token lama akan invalid setelah JWT_SECRET berubah; user perlu login ulang.
+
+### Test Database
+
+Repository test yang membutuhkan PostgreSQL akan skip otomatis jika `TEST_DATABASE_URL` tidak di-set. Database `kita_test` telah dikonfigurasi untuk otomatis dibuat saat inisialisasi Docker Compose. Untuk menjalankan test:
+
+```bash
+docker-compose up -d postgres
+export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/kita_test?sslmode=disable"
+# (Opsional jika database belum ada) docker-compose exec postgres psql -U postgres -c "CREATE DATABASE kita_test;"
+go test ./...
+```

@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	domain "kita-be/internal/book/domain"
@@ -35,14 +37,7 @@ func (r *BookRepository) ApplyStockEvent(ctx context.Context, event *domain.Book
 		event.ErrorMessage, event.CreatedAt, event.UpdatedAt,
 	).Scan(&insertedID)
 	if err == pgx.ErrNoRows {
-		existing, findErr := r.FindStockEventByEventID(ctx, event.EventID)
-		if findErr == nil {
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return nil, fmt.Errorf("failed to commit duplicate stock event check: %w", commitErr)
-			}
-			return existing, nil
-		}
-		existing, findErr = r.FindStockEventByTransactionID(ctx, event.TransactionID, string(event.EventType))
+		existing, findErr := findStockEventExisting(ctx, tx, event.EventID, event.TransactionID, string(event.EventType))
 		if findErr != nil {
 			return nil, findErr
 		}
@@ -52,6 +47,16 @@ func (r *BookRepository) ApplyStockEvent(ctx context.Context, event *domain.Book
 		return existing, nil
 	}
 	if err != nil {
+		if isUniqueViolation(err) {
+			existing, findErr := findStockEventExisting(ctx, tx, event.EventID, event.TransactionID, string(event.EventType))
+			if findErr != nil {
+				return nil, fmt.Errorf("duplicate stock event detected but lookup failed: %w", findErr)
+			}
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return nil, fmt.Errorf("failed to commit duplicate stock event check: %w", commitErr)
+			}
+			return existing, nil
+		}
 		return nil, fmt.Errorf("failed to record stock event: %w", err)
 	}
 
@@ -231,54 +236,6 @@ func (r *BookRepository) Update(ctx context.Context, book *domain.Book) error {
 	return nil
 }
 
-func (r *BookRepository) DecreaseStock(ctx context.Context, id string, qty int) error {
-	query := `
-		UPDATE books SET available_stock = available_stock - $2, updated_at = NOW()
-		WHERE id = $1 AND available_stock >= $2
-	`
-	result, err := r.pool.Exec(ctx, query, id, qty)
-	if err != nil {
-		return fmt.Errorf("failed to decrease stock: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return domain.ErrInsufficientStock
-	}
-
-	_, err = r.pool.Exec(ctx,
-		`UPDATE books SET status = 'OUT_OF_STOCK', updated_at = NOW() WHERE id = $1 AND available_stock = 0`,
-		id,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update book status: %w", err)
-	}
-
-	return nil
-}
-
-func (r *BookRepository) IncreaseStock(ctx context.Context, id string, qty int) error {
-	query := `
-		UPDATE books SET available_stock = available_stock + $2, updated_at = NOW()
-		WHERE id = $1 AND available_stock + $2 <= total_stock
-	`
-	result, err := r.pool.Exec(ctx, query, id, qty)
-	if err != nil {
-		return fmt.Errorf("failed to increase stock: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return domain.ErrStockExceedsTotal
-	}
-
-	_, err = r.pool.Exec(ctx,
-		`UPDATE books SET status = 'AVAILABLE', updated_at = NOW() WHERE id = $1 AND available_stock > 0 AND status = 'OUT_OF_STOCK'`,
-		id,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update book status: %w", err)
-	}
-
-	return nil
-}
-
 func (r *BookRepository) RecordStockEvent(ctx context.Context, event *domain.BookStockEvent) error {
 	query := `
 		INSERT INTO book_stock_events (id, event_id, book_id, transaction_id, event_type, quantity, status, error_message, processed_at, created_at, updated_at)
@@ -339,4 +296,55 @@ func (r *BookRepository) FindStockEventByTransactionID(ctx context.Context, txnI
 	ev.EventType = domain.StockEventType(evType)
 	ev.Status = domain.StockEventStatus(evStatus)
 	return &ev, nil
+}
+
+func findStockEventExisting(ctx context.Context, tx pgx.Tx, eventID, transactionID, eventType string) (*domain.BookStockEvent, error) {
+	query := `
+		SELECT id, event_id, book_id, transaction_id, event_type, quantity, status, error_message, processed_at, created_at, updated_at
+		FROM book_stock_events WHERE event_id = $1
+	`
+	var ev domain.BookStockEvent
+	var evType, evStatus string
+	err := tx.QueryRow(ctx, query, eventID).Scan(
+		&ev.ID, &ev.EventID, &ev.BookID, &ev.TransactionID,
+		&evType, &ev.Quantity, &evStatus,
+		&ev.ErrorMessage, &ev.ProcessedAt, &ev.CreatedAt, &ev.UpdatedAt,
+	)
+	if err == nil {
+		ev.EventType = domain.StockEventType(evType)
+		ev.Status = domain.StockEventStatus(evStatus)
+		return &ev, nil
+	}
+	if err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("failed to find stock event by event_id: %w", err)
+	}
+
+	err = tx.QueryRow(ctx, `
+		SELECT id, event_id, book_id, transaction_id, event_type, quantity, status, error_message, processed_at, created_at, updated_at
+		FROM book_stock_events WHERE transaction_id = $1 AND event_type = $2
+	`, transactionID, eventType).Scan(
+		&ev.ID, &ev.EventID, &ev.BookID, &ev.TransactionID,
+		&evType, &ev.Quantity, &evStatus,
+		&ev.ErrorMessage, &ev.ProcessedAt, &ev.CreatedAt, &ev.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("duplicate event detected but no existing record found for event_id=%s or (transaction_id=%s, event_type=%s)", eventID, transactionID, eventType)
+		}
+		return nil, fmt.Errorf("failed to find stock event by transaction_id: %w", err)
+	}
+	ev.EventType = domain.StockEventType(evType)
+	ev.Status = domain.StockEventStatus(evStatus)
+	return &ev, nil
+}
+
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }

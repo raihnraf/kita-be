@@ -3,13 +3,13 @@ package http_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 
 	jwtsvc "kita-be/internal/auth/jwt"
 	pwdsvc "kita-be/internal/auth/password"
@@ -174,7 +174,7 @@ func (r *handlerFakeUserRepo) Create(ctx context.Context, user *domain.User) err
 func (r *handlerFakeUserRepo) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
 	user, ok := r.users[email]
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, pgx.ErrNoRows
 	}
 	return user, nil
 }
@@ -182,7 +182,7 @@ func (r *handlerFakeUserRepo) FindByEmail(ctx context.Context, email string) (*d
 func (r *handlerFakeUserRepo) FindByID(ctx context.Context, id string) (*domain.User, error) {
 	user, ok := r.users[id]
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, pgx.ErrNoRows
 	}
 	return user, nil
 }
@@ -203,7 +203,7 @@ func (r *handlerFakeRefreshTokenRepo) Create(ctx context.Context, token *domain.
 func (r *handlerFakeRefreshTokenRepo) FindByTokenHash(ctx context.Context, hash string) (*domain.RefreshToken, error) {
 	token, ok := r.tokens[hash]
 	if !ok {
-		return nil, fmt.Errorf("token not found")
+		return nil, pgx.ErrNoRows
 	}
 	return token, nil
 }

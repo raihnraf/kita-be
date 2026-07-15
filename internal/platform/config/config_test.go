@@ -186,7 +186,7 @@ func TestLoadRejectsDevelopmentSecretsInProduction(t *testing.T) {
 		contains string
 	}{
 		{key: "JWT_SECRET", value: "dev-jwt-secret-change-in-production", contains: "JWT_SECRET must not use the development default in production"},
-		{key: "INTERNAL_API_TOKEN", value: "dev-internal-token", contains: "INTERNAL_API_TOKEN must not use the development default in production"},
+		{key: "INTERNAL_API_TOKEN", value: "dev-internal-token-change-in-production-32", contains: "INTERNAL_API_TOKEN must not use the development default in production"},
 	}
 
 	for _, tc := range cases {
@@ -219,7 +219,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret-with-at-least-32-chars")
 	t.Setenv("JWT_EXPIRY", "15m")
 	t.Setenv("REFRESH_TOKEN_EXPIRY", "168h")
-	t.Setenv("INTERNAL_API_TOKEN", "test-internal-token")
+	t.Setenv("INTERNAL_API_TOKEN", "test-internal-token-with-at-least-32-chars")
 	t.Setenv("LOAN_DAYS", "7")
 	t.Setenv("DAILY_FINE_AMOUNT", "500.0")
 	t.Setenv("MAX_ACTIVE_BORROWS", "3")

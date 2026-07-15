@@ -28,9 +28,11 @@ type TransactionResponse struct {
 }
 
 type BookSnapshotResponse struct {
-	ISBN   string `json:"isbn"`
-	Title  string `json:"title"`
-	Author string `json:"author"`
+	ID       string `json:"id"`
+	ISBN     string `json:"isbn"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	CoverURL string `json:"cover_url"`
 }
 
 type TransactionAuditResponse struct {
@@ -61,9 +63,11 @@ func FromDomain(tx domain.BorrowTransaction) TransactionResponse {
 	}
 	if tx.BookISBN != nil || tx.BookTitle != nil || tx.BookAuthor != nil {
 		resp.Book = &BookSnapshotResponse{
-			ISBN:   stringValue(tx.BookISBN),
-			Title:  stringValue(tx.BookTitle),
-			Author: stringValue(tx.BookAuthor),
+			ID:       tx.BookID,
+			ISBN:     stringValue(tx.BookISBN),
+			Title:    stringValue(tx.BookTitle),
+			Author:   stringValue(tx.BookAuthor),
+			CoverURL: getCoverURL(stringValue(tx.BookISBN)),
 		}
 	}
 	return resp
@@ -86,4 +90,18 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func getCoverURL(isbn string) string {
+	if isbn == "" {
+		return ""
+	}
+	// remove hyphens
+	clean := ""
+	for _, r := range isbn {
+		if r != '-' {
+			clean += string(r)
+		}
+	}
+	return "https://covers.openlibrary.org/b/isbn/" + clean + "-L.jpg?default=false"
 }

@@ -55,7 +55,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-in-production
       JWT_EXPIRY: 15m
       REFRESH_TOKEN_EXPIRY: 168h
-      INTERNAL_API_TOKEN: dev-internal-token
+      INTERNAL_API_TOKEN: dev-internal-token-change-in-production-32
       LOAN_DAYS: "7"
       DAILY_FINE_AMOUNT: "500.0"
       MAX_ACTIVE_BORROWS: "3"
@@ -89,7 +89,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-in-production
       JWT_EXPIRY: 15m
       REFRESH_TOKEN_EXPIRY: 168h
-      INTERNAL_API_TOKEN: dev-internal-token
+      INTERNAL_API_TOKEN: dev-internal-token-change-in-production-32
       LOAN_DAYS: "7"
       DAILY_FINE_AMOUNT: "500.0"
       MAX_ACTIVE_BORROWS: "3"
@@ -122,7 +122,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-in-production
       JWT_EXPIRY: 15m
       REFRESH_TOKEN_EXPIRY: 168h
-      INTERNAL_API_TOKEN: dev-internal-token
+      INTERNAL_API_TOKEN: dev-internal-token-change-in-production-32
       LOAN_DAYS: "7"
       DAILY_FINE_AMOUNT: "500.0"
       MAX_ACTIVE_BORROWS: "3"
@@ -156,7 +156,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-in-production
       JWT_EXPIRY: 15m
       REFRESH_TOKEN_EXPIRY: 168h
-      INTERNAL_API_TOKEN: dev-internal-token
+      INTERNAL_API_TOKEN: dev-internal-token-change-in-production-32
       LOAN_DAYS: "7"
       DAILY_FINE_AMOUNT: "500.0"
       MAX_ACTIVE_BORROWS: "3"

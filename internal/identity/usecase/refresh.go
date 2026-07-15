@@ -2,9 +2,12 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/jackc/pgx/v5"
 
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
@@ -40,7 +43,10 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, input RefreshInput) (*Ref
 
 	storedToken, err := uc.refreshTokenRepo.FindByTokenHash(ctx, tokenHash)
 	if err != nil {
-		return nil, apperror.Unauthorized("invalid refresh token")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.Unauthorized("invalid refresh token")
+		}
+		return nil, fmt.Errorf("failed to find refresh token: %w", err)
 	}
 
 	if !storedToken.IsValid() {
@@ -49,7 +55,10 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, input RefreshInput) (*Ref
 
 	user, err := uc.userRepo.FindByID(ctx, storedToken.UserID)
 	if err != nil {
-		return nil, apperror.Unauthorized("user not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.Unauthorized("user not found")
+		}
+		return nil, fmt.Errorf("failed to find user: %w", err)
 	}
 
 	accessToken, err := uc.jwtSvc.GenerateAccessToken(user.ID, user.Email, string(user.Role))
@@ -63,7 +72,7 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, input RefreshInput) (*Ref
 	}
 
 	newTokenHash := hashToken(newRefreshTokenStr)
-	newRefreshToken := domain.NewRefreshToken(uuid.New().String(), user.ID, newTokenHash, expiresAt)
+	newRefreshToken := domain.NewRefreshToken(uuid.NewString(), user.ID, newTokenHash, expiresAt)
 
 	if err := uc.refreshTokenRepo.Rotate(ctx, storedToken.ID, newRefreshToken); err != nil {
 		return nil, fmt.Errorf("failed to rotate refresh token: %w", err)

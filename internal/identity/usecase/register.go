@@ -3,10 +3,13 @@ package usecase
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
@@ -40,7 +43,12 @@ type RegisterOutput struct {
 }
 
 func (uc *RegisterUsecase) Execute(ctx context.Context, input RegisterInput) (*RegisterOutput, error) {
-	existing, _ := uc.userRepo.FindByEmail(ctx, input.Email)
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+
+	existing, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("failed to check existing user: %w", err)
+	}
 	if existing != nil {
 		return nil, apperror.Conflict("email already registered")
 	}
@@ -50,7 +58,7 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, input RegisterInput) (*R
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	user := domain.NewUser(uuid.New().String(), input.FullName, input.Email, hashedPassword)
+	user := domain.NewUser(uuid.NewString(), input.FullName, email, hashedPassword)
 
 	if err := uc.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -66,7 +74,7 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, input RegisterInput) (*R
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 
-	refreshToken := domain.NewRefreshToken(uuid.New().String(), user.ID, hashToken(refreshTokenStr), expiresAt)
+	refreshToken := domain.NewRefreshToken(uuid.NewString(), user.ID, hashToken(refreshTokenStr), expiresAt)
 	if err := uc.refreshTokenRepo.Create(ctx, refreshToken); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}

@@ -2,7 +2,10 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"kita-be/internal/platform/apperror"
 )
@@ -28,7 +31,10 @@ func (uc *LogoutUsecase) Execute(ctx context.Context, input LogoutInput) error {
 
 	storedToken, err := uc.refreshTokenRepo.FindByTokenHash(ctx, tokenHash)
 	if err != nil {
-		return apperror.Unauthorized("invalid refresh token")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperror.Unauthorized("invalid refresh token")
+		}
+		return fmt.Errorf("failed to find refresh token: %w", err)
 	}
 
 	if err := uc.refreshTokenRepo.RevokeByID(ctx, storedToken.ID); err != nil {

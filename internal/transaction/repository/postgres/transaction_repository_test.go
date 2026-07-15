@@ -21,8 +21,8 @@ func TestTransactionRepositoryConcurrencyAdvisoryLock(t *testing.T) {
 	repo := postgres.NewTransactionRepository(pool)
 	ctx := context.Background()
 
-	userID := uuid.New().String()
-	bookID := uuid.New().String()
+	userID := uuid.NewString()
+	bookID := uuid.NewString()
 	maxActive := 3
 
 	const workers = 10
@@ -34,14 +34,14 @@ func TestTransactionRepositoryConcurrencyAdvisoryLock(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			txn := domain.NewPendingBorrowTransaction(
-				uuid.New().String(),
+				uuid.NewString(),
 				fmt.Sprintf("REF-%s-%d", userID[:8], workerID),
 				userID,
 				bookID,
 				time.Now(),
 				time.Now().AddDate(0, 0, 7),
 			)
-			outbox := domain.NewStockEventOutbox(uuid.New().String(), "DECREASE", txn)
+			outbox := domain.NewStockEventOutbox(uuid.NewString(), "DECREASE", txn)
 			err := repo.CreateBorrowWithOutbox(ctx, txn, maxActive, outbox)
 			if err != nil {
 				errs <- err
@@ -94,10 +94,10 @@ func TestTransactionRepositoryReturnIfActiveConcurrency(t *testing.T) {
 	repo := postgres.NewTransactionRepository(pool)
 	ctx := context.Background()
 
-	userID := uuid.New().String()
-	bookID := uuid.New().String()
-	txnID := uuid.New().String()
-	ref := fmt.Sprintf("REF-RETURN-CONC-%s", uuid.New().String()[:8])
+	userID := uuid.NewString()
+	bookID := uuid.NewString()
+	txnID := uuid.NewString()
+	ref := fmt.Sprintf("REF-RETURN-CONC-%s", uuid.NewString()[:8])
 
 	txn := domain.NewBorrowTransaction(txnID, ref, userID, bookID, time.Now(), time.Now().AddDate(0, 0, 7))
 	if err := repo.Create(ctx, txn); err != nil {
@@ -122,7 +122,7 @@ func TestTransactionRepositoryReturnIfActiveConcurrency(t *testing.T) {
 			txToReturn.Status = domain.TransactionReturned
 			txToReturn.UpdatedAt = now
 
-			outbox := domain.NewStockEventOutbox(uuid.New().String(), "INCREASE", txToReturn)
+			outbox := domain.NewStockEventOutbox(uuid.NewString(), "INCREASE", txToReturn)
 			err = repo.ReturnIfActiveWithOutbox(ctx, txToReturn, outbox)
 			errs <- err
 		}()

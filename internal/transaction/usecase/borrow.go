@@ -74,14 +74,6 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 		}
 	}
 
-	activeCount, err := uc.txnRepo.CountActiveByUser(ctx, input.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to count active borrows: %w", err)
-	}
-	if activeCount >= uc.maxActive {
-		return nil, apperror.Conflictf("maximum %d active borrows reached", uc.maxActive)
-	}
-
 	now := time.Now()
 	dueAt := now.AddDate(0, 0, uc.loanDays)
 	ref := fmt.Sprintf("TXN-%d", now.UnixNano())
@@ -95,7 +87,7 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 	}
 
 	txn := domain.NewPendingBorrowTransaction(
-		uuid.New().String(),
+		uuid.NewString(),
 		ref,
 		input.UserID,
 		input.BookID,
@@ -104,16 +96,19 @@ func (uc *BorrowUsecase) Execute(ctx context.Context, input BorrowInput) (*Borro
 	)
 	txn.SetBookSnapshot(bookSnapshot)
 
-	outbox := domain.NewStockEventOutbox(uuid.New().String(), "DECREASE", txn)
+	outbox := domain.NewStockEventOutbox(uuid.NewString(), "DECREASE", txn)
 	if err := uc.txnRepo.CreateBorrowWithOutbox(ctx, txn, uc.maxActive, outbox); err != nil {
 		if errors.Is(err, domain.ErrActiveBorrowLimitReached) {
 			return nil, apperror.Conflictf("maximum %d active borrows reached", uc.maxActive)
+		}
+		if errors.Is(err, domain.ErrBookAlreadyBorrowed) {
+			return nil, apperror.Conflict("book is already borrowed by this user")
 		}
 		return nil, fmt.Errorf("failed to create transaction: %w", err)
 	}
 
 	audit := &domain.TransactionAudit{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		TransactionID: txn.ID,
 		ToStatus:      string(domain.TransactionPending),
 		Reason:        "Borrow requested; waiting for stock reservation",

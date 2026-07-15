@@ -2,9 +2,12 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	domain "kita-be/internal/identity/domain"
 	"kita-be/internal/platform/apperror"
@@ -44,9 +47,14 @@ type LoginOutput struct {
 }
 
 func (uc *LoginUsecase) Execute(ctx context.Context, input LoginInput) (*LoginOutput, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, input.Email)
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+
+	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
-		return nil, apperror.Unauthorized("invalid email or password")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.Unauthorized("invalid email or password")
+		}
+		return nil, fmt.Errorf("failed to find user: %w", err)
 	}
 
 	if !uc.pwdSvc.Verify(input.Password, user.PasswordHash) {
@@ -64,7 +72,7 @@ func (uc *LoginUsecase) Execute(ctx context.Context, input LoginInput) (*LoginOu
 	}
 
 	tokenHash := hashToken(refreshTokenStr)
-	refreshToken := domain.NewRefreshToken(uuid.New().String(), user.ID, tokenHash, expiresAt)
+	refreshToken := domain.NewRefreshToken(uuid.NewString(), user.ID, tokenHash, expiresAt)
 
 	if err := uc.refreshTokenRepo.Create(ctx, refreshToken); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)

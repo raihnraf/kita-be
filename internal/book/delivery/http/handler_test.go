@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	bookhttp "kita-be/internal/book/delivery/http"
 	domain "kita-be/internal/book/domain"
@@ -19,7 +20,7 @@ import (
 func TestBookHandlerCreateRejectsMissingRequiredFields(t *testing.T) {
 	app, _ := newBookTestApp()
 
-	req := httptest.NewRequest(fiber.MethodPost, "/books", strings.NewReader(`{"isbn":"978-001","total_stock":1}`))
+	req := httptest.NewRequest(fiber.MethodPost, "/books", strings.NewReader(`{"isbn":"978-0-123456-78-9","total_stock":1}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req)
@@ -34,7 +35,7 @@ func TestBookHandlerCreateRejectsMissingRequiredFields(t *testing.T) {
 func TestBookHandlerCreateSuccess(t *testing.T) {
 	app, deps := newBookTestApp()
 
-	req := httptest.NewRequest(fiber.MethodPost, "/books", strings.NewReader(`{"isbn":"978-001","title":"Go Programming","author":"John Doe","total_stock":3}`))
+	req := httptest.NewRequest(fiber.MethodPost, "/books", strings.NewReader(`{"isbn":"978-0-123456-78-9","title":"Go Programming","author":"John Doe","total_stock":3}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req)
@@ -59,14 +60,14 @@ func TestBookHandlerCreateSuccess(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !body.Success || body.Data.ISBN != "978-001" || body.Data.Title != "Go Programming" || body.Data.AvailableStock != 3 {
+	if !body.Success || body.Data.ISBN != "978-0-123456-78-9" || body.Data.Title != "Go Programming" || body.Data.AvailableStock != 3 {
 		t.Fatalf("unexpected response body: %+v", body)
 	}
 }
 
 func TestBookHandlerListNormalizesPagination(t *testing.T) {
 	app, deps := newBookTestApp()
-	deps.repo.seedBook("978-001", "Go Programming", "John Doe", 5)
+	deps.repo.seedBook("978-0-123456-78-9", "Go Programming", "John Doe", 5)
 
 	req := httptest.NewRequest(fiber.MethodGet, "/books?page=0&per_page=200", nil)
 	resp, err := app.Test(req)
@@ -92,7 +93,7 @@ func TestBookHandlerListNormalizesPagination(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !body.Success || len(body.Data) != 1 || body.Data[0].ISBN != "978-001" {
+	if !body.Success || len(body.Data) != 1 || body.Data[0].ISBN != "978-0-123456-78-9" {
 		t.Fatalf("unexpected list response: %+v", body)
 	}
 	if body.Meta.Page != 1 || body.Meta.PerPage != 20 || body.Meta.Total != 1 || body.Meta.TotalPages != 1 {
@@ -102,7 +103,7 @@ func TestBookHandlerListNormalizesPagination(t *testing.T) {
 
 func TestBookHandlerInternalDecreaseStock(t *testing.T) {
 	app, deps := newBookTestApp()
-	book := deps.repo.seedBook("978-001", "Go Programming", "John Doe", 2)
+	book := deps.repo.seedBook("978-0-123456-78-9", "Go Programming", "John Doe", 2)
 	txnID := uuid.NewString()
 
 	req := httptest.NewRequest(fiber.MethodPost, "/internal/books/"+book.ID+"/stock/decrease", strings.NewReader(`{"quantity":1,"transaction_id":"`+txnID+`"}`))
@@ -180,7 +181,7 @@ func (r *handlerFakeBookRepo) List(ctx context.Context, input usecase.ListBooksI
 func (r *handlerFakeBookRepo) FindByID(ctx context.Context, id string) (*domain.Book, error) {
 	book, ok := r.books[id]
 	if !ok {
-		return nil, fmt.Errorf("book not found")
+		return nil, pgx.ErrNoRows
 	}
 	return book, nil
 }
@@ -191,7 +192,7 @@ func (r *handlerFakeBookRepo) FindByISBN(ctx context.Context, isbn string) (*dom
 			return book, nil
 		}
 	}
-	return nil, fmt.Errorf("book not found")
+	return nil, pgx.ErrNoRows
 }
 
 func (r *handlerFakeBookRepo) Create(ctx context.Context, book *domain.Book) error {

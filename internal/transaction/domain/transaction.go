@@ -8,6 +8,7 @@ import (
 var (
 	ErrActiveBorrowLimitReached = errors.New("active borrow limit reached")
 	ErrTransactionNotActive     = errors.New("transaction is not active")
+	ErrBookAlreadyBorrowed      = errors.New("book is already borrowed")
 	ErrTransactionNotPending    = errors.New("transaction is not pending")
 )
 

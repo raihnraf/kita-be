@@ -8,7 +8,7 @@
 @base_identity = http://localhost:3000
 @base_book = http://localhost:3001
 @base_transaction = http://localhost:3002
-@internal_token = dev-internal-token
+@internal_token = dev-internal-token-change-in-production-32
 @access_token = {{login.response.body.data.access_token}}
 @refresh_token = {{login.response.body.data.refresh_token}}
 

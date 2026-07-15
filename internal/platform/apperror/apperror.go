@@ -52,3 +52,7 @@ func Conflict(message string) *Error {
 func Conflictf(format string, args ...any) *Error {
 	return Newf(KindConflict, format, args...)
 }
+
+func BadRequestf(format string, args ...any) *Error {
+	return Newf(KindBadRequest, format, args...)
+}

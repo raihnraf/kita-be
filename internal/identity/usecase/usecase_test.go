@@ -2,9 +2,10 @@ package usecase_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	jwtsvc "kita-be/internal/auth/jwt"
 	pwdsvc "kita-be/internal/auth/password"
@@ -29,7 +30,7 @@ func (r *fakeUserRepo) Create(ctx context.Context, user *domain.User) error {
 func (r *fakeUserRepo) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
 	u, ok := r.users[email]
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, pgx.ErrNoRows
 	}
 	return u, nil
 }
@@ -37,7 +38,7 @@ func (r *fakeUserRepo) FindByEmail(ctx context.Context, email string) (*domain.U
 func (r *fakeUserRepo) FindByID(ctx context.Context, id string) (*domain.User, error) {
 	u, ok := r.users[id]
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, pgx.ErrNoRows
 	}
 	return u, nil
 }
@@ -58,7 +59,7 @@ func (r *fakeRefreshTokenRepo) Create(ctx context.Context, token *domain.Refresh
 func (r *fakeRefreshTokenRepo) FindByTokenHash(ctx context.Context, hash string) (*domain.RefreshToken, error) {
 	t, ok := r.tokens[hash]
 	if !ok {
-		return nil, fmt.Errorf("token not found")
+		return nil, pgx.ErrNoRows
 	}
 	return t, nil
 }
@@ -147,6 +148,70 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for duplicate email")
+	}
+}
+
+func TestRegisterEmailCaseNormalization(t *testing.T) {
+	userRepo := newFakeUserRepo()
+	refreshTokenRepo := newFakeRefreshTokenRepo()
+	pwdSvc := pwdsvc.NewService()
+	jwtSvc := newTestJWTService()
+
+	uc := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
+
+	// Register with mixed casing and trailing/leading spaces
+	output, err := uc.Execute(context.Background(), usecase.RegisterInput{
+		FullName: "Test Normalization",
+		Email:    "  User@Email.com  ",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("expected registration to succeed: %v", err)
+	}
+
+	if output.User.Email != "user@email.com" {
+		t.Errorf("expected normalized email 'user@email.com', got '%s'", output.User.Email)
+	}
+
+	// Try to register with lowercase version - should conflict
+	_, err = uc.Execute(context.Background(), usecase.RegisterInput{
+		FullName: "Another User",
+		Email:    "user@email.com",
+		Password: "password456",
+	})
+	if err == nil {
+		t.Fatal("expected conflict error when registering duplicate normalized email")
+	}
+}
+
+func TestLoginEmailCaseNormalization(t *testing.T) {
+	userRepo := newFakeUserRepo()
+	refreshTokenRepo := newFakeRefreshTokenRepo()
+	pwdSvc := pwdsvc.NewService()
+	jwtSvc := newTestJWTService()
+
+	registerUC := usecase.NewRegisterUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
+	_, err := registerUC.Execute(context.Background(), usecase.RegisterInput{
+		FullName: "John Doe",
+		Email:    "john@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("expected registration to succeed, got: %v", err)
+	}
+
+	loginUC := usecase.NewLoginUsecase(userRepo, refreshTokenRepo, pwdSvc, jwtSvc)
+	// Login with mixed casing and extra spaces
+	output, err := loginUC.Execute(context.Background(), usecase.LoginInput{
+		Email:    "  John@Example.com  ",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("expected login to succeed with mixed casing, got: %v", err)
+	}
+
+	if output.AccessToken == "" {
+		t.Fatal("expected non-empty access token")
 	}
 }
 

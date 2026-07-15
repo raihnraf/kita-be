@@ -137,9 +137,6 @@ func TestAsyncBorrowReturnLiveFlow(t *testing.T) {
 	if returnFinal.Status == "ACTIVE" {
 		t.Fatal("return unexpectedly reverted to ACTIVE in happy-path live flow")
 	}
-	_ = registerResp
-	_ = borrowFinal
-	_ = returnFinal
 }
 
 func pollTransactionStatus(client *http.Client, transactionURL, token, transactionID string, maxRetries int, allowed ...string) (*transactionData, error) {

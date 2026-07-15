@@ -324,7 +324,7 @@ func (r *fakeIdempotencyRepo) CheckOrCreate(ctx context.Context, scope, key, has
 		return true, nil
 	}
 	r.records[k] = &domain.IdempotencyRecord{
-		ID:             uuid.New().String(),
+		ID:             uuid.NewString(),
 		Scope:          scope,
 		IdempotencyKey: key,
 		RequestHash:    hash,
@@ -371,7 +371,7 @@ func (c *fakeBookClient) DecreaseStock(ctx context.Context, bookID string, qty i
 		return "", fmt.Errorf("insufficient stock")
 	}
 	c.stock[bookID] = current - qty
-	return uuid.New().String(), nil
+	return uuid.NewString(), nil
 }
 
 func (c *fakeBookClient) GetBook(ctx context.Context, bookID string) (*domain.BookSnapshot, error) {
@@ -390,7 +390,7 @@ func (c *fakeBookClient) IncreaseStock(ctx context.Context, bookID string, qty i
 		return "", fmt.Errorf("increase failed")
 	}
 	c.stock[bookID] += qty
-	return uuid.New().String(), nil
+	return uuid.NewString(), nil
 }
 
 func (c *fakeBookClient) setStock(bookID string, qty int) {

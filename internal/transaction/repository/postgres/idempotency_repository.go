@@ -33,7 +33,7 @@ func (r *IdempotencyRepository) CheckOrCreate(ctx context.Context, scope, key, h
 
 	var id string
 	err := r.pool.QueryRow(ctx, query,
-		uuid.New().String(), scope, key, hash, expiresAt, now, now,
+		uuid.NewString(), scope, key, hash, expiresAt, now, now,
 	).Scan(&id)
 
 	if err != nil {

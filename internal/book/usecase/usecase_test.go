@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	domain "kita-be/internal/book/domain"
 	"kita-be/internal/book/usecase"
@@ -76,7 +77,7 @@ func searchSubstring(s, substr string) bool {
 func (r *fakeBookRepo) FindByID(ctx context.Context, id string) (*domain.Book, error) {
 	b, ok := r.books[id]
 	if !ok {
-		return nil, fmt.Errorf("book not found")
+		return nil, pgx.ErrNoRows
 	}
 	return b, nil
 }
@@ -87,7 +88,7 @@ func (r *fakeBookRepo) FindByISBN(ctx context.Context, isbn string) (*domain.Boo
 			return b, nil
 		}
 	}
-	return nil, fmt.Errorf("book not found")
+	return nil, pgx.ErrNoRows
 }
 
 func (r *fakeBookRepo) Create(ctx context.Context, book *domain.Book) error {
@@ -167,16 +168,16 @@ func (r *fakeBookRepo) FindStockEventByTransactionID(ctx context.Context, txnID 
 }
 
 func seedBook(repo *fakeBookRepo, isbn, title, author string, stock int) *domain.Book {
-	book := domain.NewBook(uuid.New().String(), isbn, title, author, stock)
+	book := domain.NewBook(uuid.NewString(), isbn, title, author, stock)
 	repo.books[book.ID] = book
 	return book
 }
 
 func TestListBooks(t *testing.T) {
 	repo := newFakeBookRepo()
-	seedBook(repo, "978-001", "Go Programming", "John Doe", 5)
-	seedBook(repo, "978-002", "Fiber Web", "Jane Doe", 3)
-	seedBook(repo, "978-003", "PostgreSQL Guide", "Bob Smith", 0)
+	seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 5)
+	seedBook(repo, "978-0-123456-79-7", "Fiber Web", "Jane Doe", 3)
+	seedBook(repo, "978-0-123456-80-3", "PostgreSQL Guide", "Bob Smith", 0)
 
 	uc := usecase.NewListBooksUsecase(repo)
 	output, err := uc.Execute(context.Background(), usecase.ListBooksInput{
@@ -196,8 +197,8 @@ func TestListBooks(t *testing.T) {
 
 func TestListBooksSearch(t *testing.T) {
 	repo := newFakeBookRepo()
-	seedBook(repo, "978-001", "Go Programming", "John Doe", 5)
-	seedBook(repo, "978-002", "Fiber Web", "Jane Doe", 3)
+	seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 5)
+	seedBook(repo, "978-0-123456-79-7", "Fiber Web", "Jane Doe", 3)
 
 	uc := usecase.NewListBooksUsecase(repo)
 	output, err := uc.Execute(context.Background(), usecase.ListBooksInput{
@@ -216,7 +217,7 @@ func TestListBooksSearch(t *testing.T) {
 func TestListBooksPagination(t *testing.T) {
 	repo := newFakeBookRepo()
 	for i := 0; i < 5; i++ {
-		seedBook(repo, fmt.Sprintf("978-%03d", i), fmt.Sprintf("Book %d", i), "Author", 5)
+		seedBook(repo, fmt.Sprintf("978-0-123456-%02d-9", i), fmt.Sprintf("Book %d", i), "Author", 5)
 	}
 
 	uc := usecase.NewListBooksUsecase(repo)
@@ -237,7 +238,7 @@ func TestListBooksPagination(t *testing.T) {
 
 func TestGetBook(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 5)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 5)
 
 	uc := usecase.NewGetBookUsecase(repo)
 	result, err := uc.Execute(context.Background(), book.ID)
@@ -264,7 +265,7 @@ func TestCreateBook(t *testing.T) {
 
 	uc := usecase.NewCreateBookUsecase(repo)
 	book, err := uc.Execute(context.Background(), usecase.CreateBookInput{
-		ISBN:       "978-001",
+		ISBN:       "978-0-123456-78-9",
 		Title:      "New Book",
 		Author:     "Author",
 		TotalStock: 3,
@@ -272,8 +273,8 @@ func TestCreateBook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if book.ISBN != "978-001" {
-		t.Errorf("expected ISBN 978-001, got %s", book.ISBN)
+	if book.ISBN != "978-0-123456-78-9" {
+		t.Errorf("expected ISBN 978-0-123456-78-9, got %s", book.ISBN)
 	}
 	if book.TotalStock != 3 {
 		t.Errorf("expected total_stock 3, got %d", book.TotalStock)
@@ -282,11 +283,11 @@ func TestCreateBook(t *testing.T) {
 
 func TestCreateBookDuplicateISBN(t *testing.T) {
 	repo := newFakeBookRepo()
-	seedBook(repo, "978-001", "Existing", "Author", 3)
+	seedBook(repo, "978-0-123456-78-9", "Existing", "Author", 3)
 
 	uc := usecase.NewCreateBookUsecase(repo)
 	_, err := uc.Execute(context.Background(), usecase.CreateBookInput{
-		ISBN:       "978-001",
+		ISBN:       "978-0-123456-78-9",
 		Title:      "Duplicate",
 		Author:     "Author",
 		TotalStock: 1,
@@ -296,9 +297,39 @@ func TestCreateBookDuplicateISBN(t *testing.T) {
 	}
 }
 
+func TestCreateBookInvalidISBN(t *testing.T) {
+	repo := newFakeBookRepo()
+
+	uc := usecase.NewCreateBookUsecase(repo)
+	_, err := uc.Execute(context.Background(), usecase.CreateBookInput{
+		ISBN:       "bad",
+		Title:      "New Book",
+		Author:     "Author",
+		TotalStock: 3,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid ISBN")
+	}
+}
+
+func TestCreateBookExcessiveStock(t *testing.T) {
+	repo := newFakeBookRepo()
+
+	uc := usecase.NewCreateBookUsecase(repo)
+	_, err := uc.Execute(context.Background(), usecase.CreateBookInput{
+		ISBN:       "978-0-123456-78-9",
+		Title:      "New Book",
+		Author:     "Author",
+		TotalStock: 100000,
+	})
+	if err == nil {
+		t.Fatal("expected error for excessive stock")
+	}
+}
+
 func TestStockDecreaseSuccess(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 3)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 3)
 
 	uc := usecase.NewStockUsecase(repo)
 	event, err := uc.DecreaseStock(context.Background(), book.ID, 1, "txn-1")
@@ -317,7 +348,7 @@ func TestStockDecreaseSuccess(t *testing.T) {
 
 func TestStockDecreaseInsufficient(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Rare Book", "Author", 0)
+	book := seedBook(repo, "978-0-123456-78-9", "Rare Book", "Author", 0)
 
 	uc := usecase.NewStockUsecase(repo)
 	event, err := uc.DecreaseStock(context.Background(), book.ID, 1, "txn-1")
@@ -331,7 +362,7 @@ func TestStockDecreaseInsufficient(t *testing.T) {
 
 func TestStockIncreaseSuccess(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 1)
 	if err := book.DecreaseStock(1); err != nil {
 		t.Fatalf("failed to arrange stock decrease: %v", err)
 	}
@@ -353,7 +384,7 @@ func TestStockIncreaseSuccess(t *testing.T) {
 
 func TestStockIncreaseExceedsTotal(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 1)
 
 	uc := usecase.NewStockUsecase(repo)
 	event, err := uc.IncreaseStock(context.Background(), book.ID, 1, "txn-1")
@@ -372,7 +403,7 @@ func TestStockIncreaseExceedsTotal(t *testing.T) {
 
 func TestAvailability(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Available Book", "Author", 3)
+	book := seedBook(repo, "978-0-123456-78-9", "Available Book", "Author", 3)
 
 	uc := usecase.NewStockUsecase(repo)
 	output, err := uc.CheckAvailability(context.Background(), book.ID)
@@ -389,7 +420,7 @@ func TestAvailability(t *testing.T) {
 
 func TestAvailabilityZeroStock(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Empty Book", "Author", 0)
+	book := seedBook(repo, "978-0-123456-78-9", "Empty Book", "Author", 0)
 
 	uc := usecase.NewStockUsecase(repo)
 	output, err := uc.CheckAvailability(context.Background(), book.ID)
@@ -403,7 +434,7 @@ func TestAvailabilityZeroStock(t *testing.T) {
 
 func TestStockDecreaseIdempotency(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 3)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 3)
 
 	uc := usecase.NewStockUsecase(repo)
 
@@ -431,7 +462,7 @@ func TestStockDecreaseIdempotency(t *testing.T) {
 
 func TestStockIncreaseIdempotency(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 1)
 	if err := book.DecreaseStock(1); err != nil {
 		t.Fatalf("failed to arrange stock decrease: %v", err)
 	}
@@ -462,7 +493,7 @@ func TestStockIncreaseIdempotency(t *testing.T) {
 
 func TestStockDecreaseEventIDIdempotency(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 3)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 3)
 
 	uc := usecase.NewStockUsecase(repo)
 	event1, err := uc.DecreaseStockEvent(context.Background(), book.ID, 1, "txn-1", "evt-1")
@@ -485,7 +516,7 @@ func TestStockDecreaseEventIDIdempotency(t *testing.T) {
 
 func TestStockIncreaseEventIDIdempotency(t *testing.T) {
 	repo := newFakeBookRepo()
-	book := seedBook(repo, "978-001", "Go Programming", "John Doe", 1)
+	book := seedBook(repo, "978-0-123456-78-9", "Go Programming", "John Doe", 1)
 	if err := book.DecreaseStock(1); err != nil {
 		t.Fatalf("failed to arrange stock decrease: %v", err)
 	}

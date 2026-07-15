@@ -52,23 +52,26 @@ func main() {
 	resultPublisher := bookmsg.NewPublisher(rmqPublisher)
 	handler := bookmsg.NewHandler(stockUC, resultPublisher)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// ConsumeWithReconnect blocks; runs reconnect loop internally on broker disconnect.
 	go func() {
 		logger.Info("book worker running", "queue", rabbitmq.CommandQueueName)
 		consumer.ConsumeWithReconnect(ctx, handler.HandleStockEvent)
 		logger.Info("consumer stopped")
-		// If the consumer exits on its own (exhausted reconnect attempts), signal shutdown.
-		quit <- syscall.SIGTERM
 	}()
 
 	<-quit
 	logger.Info("shutting down book worker")
 	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	<-shutdownCtx.Done()
 	logger.Info("book worker stopped")
 }
 

@@ -65,7 +65,7 @@ func (uc *StockUsecase) DecreaseStockEvent(ctx context.Context, bookID string, q
 	}
 
 	event := &domain.BookStockEvent{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		EventID:       eventIDOrNew(eventID),
 		BookID:        bookID,
 		TransactionID: transactionID,
@@ -117,7 +117,7 @@ func (uc *StockUsecase) IncreaseStockEvent(ctx context.Context, bookID string, q
 	}
 
 	event := &domain.BookStockEvent{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		EventID:       eventIDOrNew(eventID),
 		BookID:        bookID,
 		TransactionID: transactionID,
@@ -147,14 +147,14 @@ func eventIDOrNew(eventID string) string {
 	if eventID != "" {
 		return eventID
 	}
-	return uuid.New().String()
+	return uuid.NewString()
 }
 
 func newFailedStockEvent(bookID string, qty int, transactionID string, eventID string, eventType domain.StockEventType, errMessage string) *domain.BookStockEvent {
 	now := time.Now()
 	message := errMessage
 	return &domain.BookStockEvent{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		EventID:       eventIDOrNew(eventID),
 		BookID:        bookID,
 		TransactionID: transactionID,

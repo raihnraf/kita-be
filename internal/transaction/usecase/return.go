@@ -100,7 +100,7 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 
 	txn.UpdatedAt = now
 
-	outbox := domain.NewStockEventOutbox(uuid.New().String(), "INCREASE", txn)
+	outbox := domain.NewStockEventOutbox(uuid.NewString(), "INCREASE", txn)
 	if err := uc.txnRepo.StartReturnWithOutbox(ctx, txn, outbox); err != nil {
 		if errors.Is(err, domain.ErrTransactionNotActive) {
 			return nil, apperror.Conflict("transaction is not active")
@@ -109,7 +109,7 @@ func (uc *ReturnUsecase) Execute(ctx context.Context, input ReturnInput) (*Retur
 	}
 
 	audit := &domain.TransactionAudit{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		TransactionID: txn.ID,
 		FromStatus:    &fromStatus,
 		ToStatus:      string(domain.TransactionReturnPending),

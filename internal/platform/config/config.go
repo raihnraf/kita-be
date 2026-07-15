@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -28,7 +29,38 @@ type Config struct {
 	BookServiceURL       string
 }
 
+func loadEnvFile() {
+	file, err := os.Open(".env")
+	if err != nil {
+		return // Ignore if file doesn't exist
+	}
+	defer func() { _ = file.Close() }()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) ||
+			(strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) {
+			val = val[1 : len(val)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
+}
+
 func Load() (*Config, error) {
+	loadEnvFile()
+
 	jwtExpiry, err := getEnvDuration("JWT_EXPIRY", 15*time.Minute)
 	if err != nil {
 		return nil, err
@@ -107,11 +139,14 @@ func (c *Config) validate() error {
 	if c.InternalAPIToken == "" {
 		return fmt.Errorf("INTERNAL_API_TOKEN is required")
 	}
+	if len(c.InternalAPIToken) < 32 {
+		return fmt.Errorf("INTERNAL_API_TOKEN must be at least 32 characters")
+	}
 	if c.AppEnv == "production" {
 		if c.JWTSecret == "dev-jwt-secret-change-in-production" {
 			return fmt.Errorf("JWT_SECRET must not use the development default in production")
 		}
-		if c.InternalAPIToken == "dev-internal-token" {
+		if c.InternalAPIToken == "dev-internal-token" || c.InternalAPIToken == "dev-internal-token-change-in-production-32" {
 			return fmt.Errorf("INTERNAL_API_TOKEN must not use the development default in production")
 		}
 	}
