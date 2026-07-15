@@ -39,11 +39,11 @@ Uji alur asinkron end-to-end secara penuh (registrasi user baru, login, query bu
 ./scripts/verify_flow.sh
 ```
 
-### 5. Dokumen Navigasi Reviewer
-- [BACKEND_SUBMISSION_CHECKLIST.md](file:///home/raihan/Documents/modela-potentia/kita-be/BACKEND_SUBMISSION_CHECKLIST.md) - Checklist ringkas status verifikasi.
-- [BACKEND_DEMO_SCRIPT.md](file:///home/raihan/Documents/modela-potentia/kita-be/BACKEND_DEMO_SCRIPT.md) - Panduan demo interaktif 3-5 menit.
-- [SUBMISSION_NARRATIVE.md](file:///home/raihan/Documents/modela-potentia/kita-be/SUBMISSION_NARRATIVE.md) - Alasan dan arsitektur keputusan desain.
-- [docs/openapi.yaml](file:///home/raihan/Documents/modela-potentia/kita-be/docs/openapi.yaml) - Spesifikasi/kontrak API OpenAPI 3.
+### 5. Navigasi Reviewer Backend
+- `README.md` - Ringkasan arsitektur backend, cara menjalankan, mapping ke `soal.md`, dan penerapan SOLID.
+- `docs/openapi.yaml` - Spesifikasi/kontrak API OpenAPI 3.
+- `docs/api-requests.http` - Contoh request untuk mencoba endpoint utama.
+- `internal/` - Implementasi Clean Architecture per service (`identity`, `book`, `transaction`, dan `platform`).
 
 > [!IMPORTANT]
 > **Asynchronous Saga & Transaction Constraints**:
