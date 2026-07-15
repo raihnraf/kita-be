@@ -27,7 +27,6 @@ func NewClient(baseURL, apiToken string) *Client {
 	}
 }
 
-
 func (c *Client) GetBook(ctx context.Context, bookID string) (*domain.BookSnapshot, error) {
 	url := fmt.Sprintf("%s/api/v1/books/%s", c.baseURL, bookID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -80,7 +79,6 @@ func (c *Client) GetBook(ctx context.Context, bookID string) (*domain.BookSnapsh
 	}, nil
 }
 
-
 func (c *Client) Ready(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/ready", nil)
 	if err != nil {
@@ -98,4 +96,3 @@ func (c *Client) Ready(ctx context.Context) error {
 	}
 	return nil
 }
-
