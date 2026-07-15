@@ -8,9 +8,9 @@ Backend untuk prototipe Sistem Informasi Perpustakaan sesuai `soal.md`.
 
 Repository ini hanya berisi backend. Aplikasi mobile Flutter berada di repository terpisah dan menggunakan backend ini sebagai API server.
 
-## Reviewer Quick Start (Step-by-Step)
+## Langkah Review Backend
 
-Untuk memverifikasi backend ini secara cepat dan handal, ikuti langkah-langkah berikut:
+Untuk cek backend ini, jalankan langkah-langkah berikut:
 
 ### 1. Jalankan Unit & Race Tests
 Pastikan semua unit test, race conditions detector, dan build berjalan bersih di local environment:
@@ -96,26 +96,26 @@ Bagian ini merangkum kebutuhan backend dari `soal.md` dan implementasinya di rep
 
 ---
 
-## Engineering Highlights
+## Catatan Implementasi
 
-Selain fitur wajib dan nilai plus dari soal, backend ini juga menambahkan beberapa detail engineering agar sistem lebih aman saat retry, concurrency, dan integrasi antar service.
+Bagian ini merangkum beberapa keputusan implementasi yang dipakai di backend ini.
 
-- **Idempotency dengan response replay**: request peminjaman dan pengembalian yang dikirim ulang dengan `idempotency_key` yang sama dapat mengembalikan response awal, sehingga retry dari client lebih aman dan tidak membuat transaksi atau mutasi stok ganda.
-- **Advisory lock untuk limit borrow**: validasi batas pinjam aktif yang definitif dan pembuatan transaksi borrow dibungkus dengan PostgreSQL advisory lock per user agar request paralel tidak bisa melewati batas maksimal 3 buku.
+- **Idempotency pada borrow dan return**: request peminjaman dan pengembalian yang dikirim ulang dengan `idempotency_key` yang sama dapat mengembalikan response awal, sehingga retry dari client tidak membuat transaksi atau mutasi stok ganda.
+- **Advisory lock untuk limit borrow**: validasi batas pinjam aktif dan pembuatan transaksi borrow dibungkus dengan PostgreSQL advisory lock per user agar request paralel tidak bisa melewati batas maksimal 3 buku.
 - **Stock event idempotency**: constraint unik `(transaction_id, event_type)` pada `book_stock_events` memastikan stok tidak berubah dua kali untuk event transaksi yang sama, meskipun RabbitMQ mengirim duplicate message.
 - **RabbitMQ publisher confirms**: publisher menunggu `ack` dari broker sebelum dianggap berhasil, sehingga kegagalan publish bisa terdeteksi dan dilog.
 - **Transactional outbox untuk RabbitMQ**: Transaction Service menyimpan intent publish event stok di database yang sama dengan transaksi borrow/return, lalu dispatcher mem-publish dan retry sampai sukses.
 - **RabbitMQ consumer reconnect loop**: consumer otomatis retry dan reconnect saat broker bermasalah; jalur reconnect broker memakai exponential backoff, sementara startup retry dibuat sederhana dengan delay tetap.
-- **Dead Letter Queue**: message yang tetap gagal setelah retry tidak hilang diam-diam, tetapi masuk ke DLQ agar bisa diperiksa.
+- **Dead Letter Queue**: message yang tetap gagal setelah retry akan masuk ke DLQ agar bisa diperiksa.
 - **Async saga untuk borrow dan return**: request borrow membuat transaksi `PENDING` dan internal outbox operasi stock decrease; request return membuat transaksi `RETURN_PENDING` dan internal outbox operasi stock increase. Di boundary RabbitMQ, command/result memakai contract eksplisit seperti `DecreaseStockRequested`, `DecreaseStockSucceeded`, `IncreaseStockRequested`, dan `IncreaseStockRejected`. Book Worker memproses command stok secara idempoten lalu mem-publish result event, dan Transaction Service memfinalkan status transaksi dari result tersebut.
-- **Deterministic command replay**: Book Service menyimpan hasil sukses atau gagal dari stock command per `(transaction_id, event_type)`. Jika message di-retry atau dipublish ulang oleh reconciliation worker, hasilnya tetap sama dan tidak tergantung kondisi stok terbaru di saat retry.
-- **Reconciliation sebagai re-dispatch**: jika transaksi terlalu lama di `PENDING` atau `RETURN_PENDING`, reconciliation worker tidak langsung membatalkan bisnis. Worker akan menandai command outbox untuk dipublish ulang agar result event bisa diproduksi ulang secara aman.
+- **Replay command yang konsisten**: Book Service menyimpan hasil sukses atau gagal dari stock command per `(transaction_id, event_type)`. Jika message di-retry atau dipublish ulang oleh reconciliation worker, hasilnya tetap sama dan tidak bergantung pada kondisi stok terbaru saat retry.
+- **Re-dispatch oleh reconciliation worker**: jika transaksi terlalu lama di `PENDING` atau `RETURN_PENDING`, reconciliation worker tidak langsung membatalkan bisnis. Worker akan menandai command outbox untuk dipublish ulang agar result event bisa diproduksi ulang dengan aman.
 - **Integer cents untuk uang**: denda dihitung, diekspos, dan disimpan langsung sebagai integer cents (`fine_amount_cents` dengan tipe `BIGINT` di PostgreSQL) untuk menghindari floating-point error dan overhead konversi database-ke-aplikasi.
-- **Double-return protection**: proses return memakai idempotency replay, conditional update `WHERE status='ACTIVE'`, transactional outbox, dan stock event idempotency; request paralel tidak meninggalkan kenaikan stok ganda permanen.
+- **Pencegahan return ganda**: proses return memakai idempotency replay, conditional update `WHERE status='ACTIVE'`, transactional outbox, dan stock event idempotency; request paralel tidak meninggalkan kenaikan stok ganda permanen.
 - **Book snapshot saat borrow**: judul, penulis, dan ISBN disimpan ke transaksi saat peminjaman, sehingga history tetap stabil meskipun data buku berubah dan tidak perlu query Book Service per baris history.
-- **Token type enforcement**: JWT membawa field `token_type`, sehingga access token dan refresh token tidak bisa saling tertukar penggunaannya.
+- **Pemisahan access token dan refresh token**: JWT membawa field `token_type`, sehingga access token dan refresh token tidak bisa saling tertukar penggunaannya.
 - **Rate limiting**: endpoint auth dan write transaction dibatasi dengan Fiber rate limiter untuk mengurangi brute force dan request spam.
-- **golangci-lint config tersedia**: konfigurasi lint mencakup `errcheck`, `govet`, `ineffassign`, `staticcheck`, dan `unused` untuk menjaga kualitas kode.
+- **Konfigurasi golangci-lint**: konfigurasi lint mencakup `errcheck`, `govet`, `ineffassign`, `staticcheck`, dan `unused` untuk menjaga kualitas kode.
 
 ---
 
@@ -260,7 +260,7 @@ SERVER_PORT=3002 DB_NAME=kita_transaction BOOK_SERVICE_URL=http://localhost:3001
 DB_NAME=kita_book RABBITMQ_URL=amqp://guest:guest@localhost:5672/ make run-worker
 ```
 
-Catatan: `book-api` memakai `RABBITMQ_URL` kosong karena query catalog dan read-paths didesain tanpa koneksi broker langsung, sementara penyesuaian stok dilakukan secara asinkron oleh `book-worker`. `transaction-api` menyimpan stock intent ke outbox RabbitMQ agar event yang gagal publish atau butuh retry tetap bisa diproses ulang secara durable, dan duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
+Catatan: `book-api` memakai `RABBITMQ_URL` kosong karena query catalog dan read-paths didesain tanpa koneksi broker langsung, sementara penyesuaian stok dilakukan secara asinkron oleh `book-worker`. `transaction-api` menyimpan stock intent ke outbox RabbitMQ agar event yang gagal publish atau butuh retry tetap bisa diproses ulang, dan duplicate event tetap aman karena `book_stock_events` memiliki constraint unik `(transaction_id, event_type)`.
 
 Perintah Makefile yang tersedia:
 
