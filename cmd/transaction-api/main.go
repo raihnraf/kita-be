@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
+	"sync"
 	"time"
-
-	"github.com/gofiber/fiber/v2"
 
 	jwtsvc "kita-be/internal/auth/jwt"
 	authmw "kita-be/internal/auth/middleware"
@@ -18,7 +16,6 @@ import (
 	"kita-be/internal/platform/logger"
 	platformmw "kita-be/internal/platform/middleware"
 	"kita-be/internal/platform/rabbitmq"
-	"kita-be/internal/platform/response"
 	bookclient "kita-be/internal/transaction/client/book"
 	txnhttp "kita-be/internal/transaction/delivery/http"
 	txnmsg "kita-be/internal/transaction/messaging"
@@ -27,28 +24,33 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		logger.Error("transaction service encountered fatal error", "error", err.Error())
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	logger.Info("starting transaction service")
 
 	db, err := database.NewPool(cfg)
 	if err != nil {
-		logger.Error("failed to connect to database", "error", err.Error())
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer db.Close()
+
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	defer serviceCancel()
 
 	jwtService := jwtsvc.NewService(cfg.JWTSecret, cfg.JWTExpiry, cfg.RefreshTokenExpiry)
 
 	if cfg.BookServiceURL == "" {
-		logger.Error("BOOK_SERVICE_URL is required for transaction service")
-		os.Exit(1)
+		return fmt.Errorf("BOOK_SERVICE_URL is required for transaction service")
 	}
 
 	bookClient := bookclient.NewClient(cfg.BookServiceURL, cfg.InternalAPIToken)
@@ -64,10 +66,12 @@ func main() {
 	returnUC := usecase.NewReturnUsecase(txnRepo, auditRepo, idempotencyRepo, fineCalc)
 	historyUC := usecase.NewHistoryUsecase(txnRepo, auditRepo)
 
+	var wg sync.WaitGroup
+
 	var rmqConn *rabbitmq.Connection
 	if cfg.RabbitMQURL == "" {
 		logger.Info("rabbitmq stock event outbox dispatcher disabled")
-	} else if conn, err := connectRabbitMQWithRetry(cfg.RabbitMQURL, 30, 2*time.Second); err != nil {
+	} else if conn, err := rabbitmq.ConnectWithRetry(cfg.RabbitMQURL, 30, 2*time.Second); err != nil {
 		logger.Warn("rabbitmq not available, running without async stock events", "error", err.Error())
 	} else {
 		rmqConn = conn
@@ -81,47 +85,46 @@ func main() {
 			dispatcher := txnmsg.NewOutboxDispatcher(outboxRepo, msgPublisher, 2*time.Second, 10)
 			resultConsumer := rabbitmq.NewConsumer(rmqConn, rabbitmq.ResultQueueName)
 			resultHandler := txnmsg.NewResultHandler(txnRepo, auditRepo)
-			go dispatcher.Run(serviceCtx)
-			go resultConsumer.ConsumeWithReconnect(serviceCtx, resultHandler.HandleStockResult)
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				dispatcher.Run(serviceCtx)
+			}()
+			go func() {
+				defer wg.Done()
+				resultConsumer.ConsumeWithReconnect(serviceCtx, resultHandler.HandleStockResult)
+			}()
 			logger.Info("rabbitmq stock event outbox dispatcher enabled")
 		}
 	}
 
 	reconciler := txnmsg.NewReconciliationWorker(txnRepo, 30*time.Second, 1*time.Minute)
-	go reconciler.Run(serviceCtx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reconciler.Run(serviceCtx)
+	}()
 
 	handler := txnhttp.NewTransactionHandler(borrowUC, returnUC, historyUC)
 
 	app := httpserver.New()
 
-	app.Get("/api/v1/health", func(c *fiber.Ctx) error {
-		return response.OK(c, fiber.Map{
-			"service": "transaction-service",
-			"status":  "healthy",
+	readinessChecks := []httpserver.ReadinessCheck{
+		{Name: "database", Check: db.Ping},
+		{Name: "book service", Check: bookClient.Ready},
+	}
+	if cfg.RabbitMQURL != "" {
+		readinessChecks = append(readinessChecks, httpserver.ReadinessCheck{
+			Name: "rabbitmq",
+			Check: func(_ context.Context) error {
+				if rmqConn == nil || !rmqConn.IsConnected() {
+					return errors.New("rabbitmq is not connected")
+				}
+				return nil
+			},
 		})
-	})
-
-	app.Get("/api/v1/ready", func(c *fiber.Ctx) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		if err := db.Ping(ctx); err != nil {
-			return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "database is not reachable")
-		}
-		if err := bookClient.Ready(ctx); err != nil {
-			return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "book service is not reachable")
-		}
-		if cfg.RabbitMQURL != "" {
-			if rmqConn == nil || !rmqConn.IsConnected() {
-				return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "rabbitmq is not connected")
-			}
-		}
-
-		return response.OK(c, fiber.Map{
-			"service": "transaction-service",
-			"status":  "ready",
-		})
-	})
+	}
+	httpserver.RegisterHealthRoutes(app, "/api/v1", "transaction-service", readinessChecks...)
 
 	api := app.Group("/api/v1")
 	readLimiter := platformmw.RateLimit(120, time.Minute)
@@ -139,47 +142,12 @@ func main() {
 	internal.Get("/transactions/:id/audits", readLimiter, handler.InternalTransactionAudits)
 	internal.Get("/transactions/:id", readLimiter, handler.InternalTransactionDetail)
 
-	go func() {
-		addr := fmt.Sprintf(":%s", cfg.ServerPort)
-		if err := app.Listen(addr); err != nil {
-			logger.Error("server failed", "error", err.Error())
-			os.Exit(1)
-		}
-	}()
+	err = httpserver.ListenAndServeWithGracefulShutdown(app, cfg.ServerPort, "transaction service", 10*time.Second)
 
-	logger.Info("transaction service listening", "port", cfg.ServerPort)
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("shutting down transaction service")
+	// Stop background workers and wait for them to finish before the deferred
+	// cleanup closes the RabbitMQ connection and database pool.
 	serviceCancel()
+	wg.Wait()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
-		logger.Error("server shutdown error", "error", err.Error())
-	}
-
-	logger.Info("transaction service stopped")
-}
-
-func connectRabbitMQWithRetry(url string, attempts int, initialDelay time.Duration) (*rabbitmq.Connection, error) {
-	var lastErr error
-	delay := initialDelay
-	for i := 1; i <= attempts; i++ {
-		conn, err := rabbitmq.NewConnection(url)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		logger.Warn("rabbitmq connection attempt failed", "attempt", i, "max_attempts", attempts, "error", err.Error())
-		time.Sleep(delay)
-		if delay < 30*time.Second {
-			delay *= 2
-		}
-	}
-	return nil, lastErr
+	return err
 }

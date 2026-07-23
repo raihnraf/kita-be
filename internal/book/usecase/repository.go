@@ -6,6 +6,7 @@ import (
 	domain "kita-be/internal/book/domain"
 )
 
+// kontrak dengan database
 type BookRepository interface {
 	List(ctx context.Context, input domain.ListBooksInput) ([]domain.Book, int64, error)
 	FindByID(ctx context.Context, id string) (*domain.Book, error)

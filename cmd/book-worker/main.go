@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,33 +19,36 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		logger.Error("book worker encountered fatal error", "error", err.Error())
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	logger.Info("starting book worker")
 
 	db, err := database.NewPool(cfg)
 	if err != nil {
-		logger.Error("failed to connect to database", "error", err.Error())
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer db.Close()
 
-	rmqConn, err := connectRabbitMQWithRetry(cfg.RabbitMQURL, 30, 2*time.Second)
+	rmqConn, err := rabbitmq.ConnectWithRetry(cfg.RabbitMQURL, 30, 2*time.Second)
 	if err != nil {
-		logger.Error("failed to connect to rabbitmq", "error", err.Error())
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to rabbitmq: %w", err)
 	}
 	defer rmqConn.Close()
 
 	rmqPublisher := rabbitmq.NewPublisher(rmqConn)
 	consumer := rabbitmq.NewConsumer(rmqConn, rabbitmq.CommandQueueName)
 	if err := consumer.Setup(); err != nil {
-		logger.Error("failed to setup consumer topology", "error", err.Error())
-		os.Exit(1)
+		return fmt.Errorf("failed to setup consumer topology: %w", err)
 	}
 
 	bookRepo := bookrepo.NewBookRepository(db)
@@ -52,43 +56,25 @@ func main() {
 	resultPublisher := bookmsg.NewPublisher(rmqPublisher)
 	handler := bookmsg.NewHandler(stockUC, resultPublisher)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		logger.Info("book worker running", "queue", rabbitmq.CommandQueueName)
 		consumer.ConsumeWithReconnect(ctx, handler.HandleStockEvent)
 		logger.Info("consumer stopped")
 	}()
 
-	<-quit
+	<-ctx.Done()
+	// Restore default signal behavior so a second signal force-kills the process.
+	stop()
 	logger.Info("shutting down book worker")
-	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	<-shutdownCtx.Done()
-	logger.Info("book worker stopped")
-}
-
-func connectRabbitMQWithRetry(url string, attempts int, initialDelay time.Duration) (*rabbitmq.Connection, error) {
-	var lastErr error
-	delay := initialDelay
-	for i := 1; i <= attempts; i++ {
-		conn, err := rabbitmq.NewConnection(url)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		logger.Warn("rabbitmq connection attempt failed", "attempt", i, "max_attempts", attempts, "error", err.Error())
-		time.Sleep(delay)
-		if delay < 30*time.Second {
-			delay *= 2
-		}
-	}
-	return nil, lastErr
+	wg.Wait()
+	logger.Info("book worker stopped cleanly")
+	return nil
 }

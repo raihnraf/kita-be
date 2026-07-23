@@ -7,6 +7,7 @@ import (
 	"kita-be/internal/platform/pagination"
 )
 
+// Ambil banyak buku (paginated)
 type ListBooksUsecase struct {
 	bookRepo BookRepository
 }

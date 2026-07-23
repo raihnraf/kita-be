@@ -1,14 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
-
-	"github.com/gofiber/fiber/v2"
 
 	jwtsvc "kita-be/internal/auth/jwt"
 	authmw "kita-be/internal/auth/middleware"
@@ -21,22 +16,26 @@ import (
 	"kita-be/internal/platform/httpserver"
 	"kita-be/internal/platform/logger"
 	platformmw "kita-be/internal/platform/middleware"
-	"kita-be/internal/platform/response"
 )
 
 func main() {
+	if err := run(); err != nil {
+		logger.Error("identity service encountered fatal error", "error", err.Error())
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	logger.Info("starting identity service")
 
 	db, err := database.NewPool(cfg)
 	if err != nil {
-		logger.Error("failed to connect to database", "error", err.Error())
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer db.Close()
 
@@ -56,26 +55,9 @@ func main() {
 
 	app := httpserver.New()
 
-	app.Get("/api/v1/health", func(c *fiber.Ctx) error {
-		return response.OK(c, fiber.Map{
-			"service": "identity-service",
-			"status":  "healthy",
-		})
-	})
-
-	app.Get("/api/v1/ready", func(c *fiber.Ctx) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		if err := db.Ping(ctx); err != nil {
-			return response.Error(c, fiber.StatusServiceUnavailable, "NOT_READY", "database is not reachable")
-		}
-
-		return response.OK(c, fiber.Map{
-			"service": "identity-service",
-			"status":  "ready",
-		})
-	})
+	httpserver.RegisterHealthRoutes(app, "/api/v1", "identity-service",
+		httpserver.ReadinessCheck{Name: "database", Check: db.Ping},
+	)
 
 	api := app.Group("/api/v1")
 	authLimiter := platformmw.RateLimit(10, time.Minute)
@@ -87,28 +69,5 @@ func main() {
 	protected := api.Group("", authmw.JWTAuth(jwtService))
 	protected.Get("/users/me", handler.Profile)
 
-	go func() {
-		addr := fmt.Sprintf(":%s", cfg.ServerPort)
-		if err := app.Listen(addr); err != nil {
-			logger.Error("server failed", "error", err.Error())
-			os.Exit(1)
-		}
-	}()
-
-	logger.Info("identity service listening", "port", cfg.ServerPort)
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("shutting down identity service")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
-		logger.Error("server shutdown error", "error", err.Error())
-	}
-
-	logger.Info("identity service stopped")
+	return httpserver.ListenAndServeWithGracefulShutdown(app, cfg.ServerPort, "identity service", 10*time.Second)
 }

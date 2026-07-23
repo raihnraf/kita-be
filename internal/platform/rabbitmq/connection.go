@@ -62,9 +62,11 @@ func (c *Connection) Reconnect(maxAttempts int, initialDelay time.Duration) erro
 			return nil
 		}
 		logger.Warn("rabbitmq reconnect attempt failed", "attempt", i, "error", err.Error())
-		time.Sleep(delay)
-		if delay < 30*time.Second {
-			delay *= 2
+		if i < maxAttempts {
+			time.Sleep(delay)
+			if delay < 30*time.Second {
+				delay *= 2
+			}
 		}
 	}
 	return fmt.Errorf("rabbitmq reconnect failed after %d attempts", maxAttempts)
@@ -89,4 +91,29 @@ func (c *Connection) Channel() (*amqp.Channel, error) {
 
 func (c *Connection) GetConn() *amqp.Connection {
 	return c.conn
+}
+
+// ConnectWithRetry attempts to establish a connection to RabbitMQ with retry and exponential backoff.
+func ConnectWithRetry(url string, attempts int, initialDelay time.Duration) (*Connection, error) {
+	if url == "" {
+		return nil, fmt.Errorf("rabbitmq url is empty")
+	}
+
+	var lastErr error
+	delay := initialDelay
+	for i := 1; i <= attempts; i++ {
+		conn, err := NewConnection(url)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		logger.Warn("rabbitmq connection attempt failed", "attempt", i, "max_attempts", attempts, "error", err.Error())
+		if i < attempts {
+			time.Sleep(delay)
+			if delay < 30*time.Second {
+				delay *= 2
+			}
+		}
+	}
+	return nil, fmt.Errorf("rabbitmq connection failed after %d attempts: %w", attempts, lastErr)
 }
